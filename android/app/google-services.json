@@ -1,0 +1,30 @@
+{
+  "project_info": {
+    "project_number": "966643038975",
+    "firebase_url": "https://blindly-9d3a7-default-rtdb.firebaseio.com",
+    "project_id": "blindly-9d3a7",
+    "storage_bucket": "blindly-9d3a7.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:966643038975:android:26aec247032de77df7eaca",
+        "android_client_info": {
+          "package_name": "com.example.blindly"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDqCAXz_Uz1aQGdRAyIzrdo4H9hpHVU84E"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

@@ -1,0 +1,54 @@
+{
+  "project_info": {
+    "project_number": "1064511627841",
+    "project_id": "blindly-807b1",
+    "storage_bucket": "blindly-807b1.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:1064511627841:android:a6e723ea24e344fa341cc0",
+        "android_client_info": {
+          "package_name": "com.example.blindly"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "1064511627841-4ghr7qdrbd1g81fjr6mopjgf166f1b83.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.example.blindly",
+            "certificate_hash": "582cae5e00d47bb9cb57b07785ef61cc9cd09d0f"
+          }
+        },
+        {
+          "client_id": "1064511627841-2uf10n2qp5erlqd3388d1q9sjssmdime.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAh39gDXHU5QfZYoOPOtpYlOSC3JEGKO1U"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "1064511627841-2uf10n2qp5erlqd3388d1q9sjssmdime.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "1064511627841-ug7b0vsipvr2ko83bdc6f0po9ps5navi.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.example.blindly"
+              }
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

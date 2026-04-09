@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 
 class OnBoarding2 extends StatefulWidget {
+  static final ValueNotifier<bool> isActive = ValueNotifier<bool>(false);
+
   const OnBoarding2({super.key});
 
   @override
@@ -16,6 +18,7 @@ class _SplashScreen3State extends State<OnBoarding2>
   @override
   void initState() {
     super.initState();
+    OnBoarding2.isActive.value = true;
 
     _controller = AnimationController(
       vsync: this,
@@ -34,6 +37,7 @@ class _SplashScreen3State extends State<OnBoarding2>
 
   @override
   void dispose() {
+    OnBoarding2.isActive.value = false;
     _controller.dispose();
     super.dispose();
   }

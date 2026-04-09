@@ -1,7 +1,26 @@
 import 'package:flutter/material.dart';
 
-class OnBoarding3 extends StatelessWidget {
+class OnBoarding3 extends StatefulWidget {
+  static final ValueNotifier<bool> isActive = ValueNotifier<bool>(false);
+
   const OnBoarding3({super.key});
+
+  @override
+  State<OnBoarding3> createState() => _OnBoarding3State();
+}
+
+class _OnBoarding3State extends State<OnBoarding3> {
+  @override
+  void initState() {
+    super.initState();
+    OnBoarding3.isActive.value = true;
+  }
+
+  @override
+  void dispose() {
+    OnBoarding3.isActive.value = false;
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {

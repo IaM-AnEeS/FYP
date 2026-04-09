@@ -1,11 +1,16 @@
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:google_sign_in/google_sign_in.dart';
+import 'app_analytics_service.dart';
 import 'session_service.dart';
 
 class AuthService {
   final FirebaseAuth _auth = FirebaseAuth.instance;
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+  final AppAnalyticsService _analyticsService = AppAnalyticsService();
+
+  static const String suspendedAccountMessage =
+      'You are suspended. Please contact admin at this email: sumerahmed0077@gmail.com';
 
   // Register a new user
   Future<User?> registerUser(
@@ -38,7 +43,9 @@ class AuthService {
       final userData = <String, dynamic>{
         'name': name,
         'email': email,
+        'accountStatus': 'active',
         'createdAt': DateTime.now(),
+        'updatedAt': DateTime.now(),
       };
 
       if (username != null && username.isNotEmpty) {
@@ -74,6 +81,11 @@ class AuthService {
         userId: user.uid,
         email: user.email ?? email,
       );
+
+      await _analyticsService.recordLoginActivity(
+        userId: user.uid,
+        userEmail: user.email ?? email,
+      );
       return user;
     } on FirebaseAuthException catch (e) {
       print('[AUTH] FirebaseAuthException during registration: ${e.message}');
@@ -93,9 +105,16 @@ class AuthService {
       );
       final user = result.user;
       if (user != null) {
+        await _ensureAccountIsActive(user);
+
         await SessionService.startSession(
           userId: user.uid,
           email: user.email ?? email,
+        );
+
+        await _analyticsService.recordLoginActivity(
+          userId: user.uid,
+          userEmail: user.email ?? email,
         );
       }
       return user;
@@ -156,13 +175,26 @@ class AuthService {
           await _firestore.collection('users').doc(user.uid).set({
             'name': user.displayName ?? '',
             'email': user.email ?? '',
+            'accountStatus': 'active',
             'createdAt': FieldValue.serverTimestamp(),
+            'updatedAt': FieldValue.serverTimestamp(),
           });
+        } else {
+          await _firestore.collection('users').doc(user.uid).set({
+            'updatedAt': FieldValue.serverTimestamp(),
+          }, SetOptions(merge: true));
         }
+
+        await _ensureAccountIsActive(user);
 
         await SessionService.startSession(
           userId: user.uid,
           email: user.email ?? '',
+        );
+
+        await _analyticsService.recordLoginActivity(
+          userId: user.uid,
+          userEmail: user.email ?? '',
         );
       }
       return user;
@@ -171,5 +203,51 @@ class AuthService {
     } catch (e) {
       rethrow;
     }
+  }
+
+  Future<bool> isCurrentUserSuspended() async {
+    final user = _auth.currentUser;
+    if (user == null) return false;
+
+    final profile = await _firestore.collection('users').doc(user.uid).get();
+    final data = profile.data() ?? <String, dynamic>{};
+    return _isSuspendedStatus(data['accountStatus']);
+  }
+
+  Future<void> _ensureAccountIsActive(User user) async {
+    final docRef = _firestore.collection('users').doc(user.uid);
+    final userDoc = await docRef.get();
+
+    if (!userDoc.exists) {
+      await docRef.set({
+        'name': user.displayName ?? '',
+        'email': user.email ?? '',
+        'accountStatus': 'active',
+        'createdAt': FieldValue.serverTimestamp(),
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+      return;
+    }
+
+    final data = userDoc.data() ?? <String, dynamic>{};
+    final currentStatus = data['accountStatus'];
+
+    if (_isSuspendedStatus(currentStatus)) {
+      await SessionService.endSession();
+      await _auth.signOut();
+      throw suspendedAccountMessage;
+    }
+
+    if (currentStatus == null || currentStatus.toString().trim().isEmpty) {
+      await docRef.set({
+        'accountStatus': 'active',
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+    }
+  }
+
+  bool _isSuspendedStatus(dynamic status) {
+    final normalized = status?.toString().trim().toLowerCase() ?? '';
+    return normalized == 'suspended';
   }
 }

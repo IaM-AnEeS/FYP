@@ -1,6 +1,12 @@
+import 'dart:async';
+
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:speech_to_text/speech_to_text.dart' as stt;
+
+import '../Services/auth_service.dart';
+import '../Services/session_service.dart';
+import '../Services/voice_assistant_service.dart';
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
@@ -14,9 +20,49 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   // Get current Firebase user
   final User? user = FirebaseAuth.instance.currentUser;
-  late stt.SpeechToText _speech;
-  bool _isListening = false;
-  String _lastWords = '';
+  final VoiceAssistantService _voiceAssistant = VoiceAssistantService.instance;
+  StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>?
+      _accountStatusSubscription;
+
+  @override
+  void initState() {
+    super.initState();
+    _watchAccountStatus();
+  }
+
+  @override
+  void dispose() {
+    _accountStatusSubscription?.cancel();
+    super.dispose();
+  }
+
+  void _watchAccountStatus() {
+    final currentUser = user;
+    if (currentUser == null) return;
+
+    _accountStatusSubscription = FirebaseFirestore.instance
+        .collection('users')
+        .doc(currentUser.uid)
+        .snapshots()
+        .listen((snapshot) async {
+      final status =
+          (snapshot.data()?['accountStatus']?.toString() ?? 'active').toLowerCase();
+
+      if (status != 'suspended') return;
+
+      await SessionService.endSession();
+      await FirebaseAuth.instance.signOut();
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(AuthService.suspendedAccountMessage),
+        ),
+      );
+
+      Navigator.pushNamedAndRemoveUntil(context, '/login', (_) => false);
+    });
+  }
 
   void _onNavTap(int index) {
     setState(() {
@@ -37,12 +83,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
         Navigator.pushNamed(context, '/settings');
         break;
     }
-  }
-
-  @override
-  void initState() {
-    super.initState();
-    _speech = stt.SpeechToText();
   }
 
   @override
@@ -98,34 +138,16 @@ class _DashboardScreenState extends State<DashboardScreen> {
               ),
               const SizedBox(height: 25),
 
-              // --- Top Buttons Row ---
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Expanded(
-                    child: _buildOptionCard(
-                      context,
-                      icon: Icons.navigation_outlined,
-                      title: "Navigate",
-                      subtitle: "Realtime directions",
-                      onTap: () {
-                        Navigator.pushNamed(context, '/navigation');
-                      },
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: _buildOptionCard(
-                      context,
-                      icon: Icons.center_focus_strong,
-                      title: "Object Detection",
-                      subtitle: "Identify objects nearby",
-                      onTap: () {
-                        Navigator.pushNamed(context, '/detection');
-                      },
-                    ),
-                  ),
-                ],
+              // --- Top Action Card ---
+              _buildOptionCard(
+                context,
+                icon: Icons.navigation_outlined,
+                title: "Navigate",
+                subtitle: "Realtime directions",
+                cardHeight: 165,
+                onTap: () {
+                  Navigator.pushNamed(context, '/navigation');
+                },
               ),
               const SizedBox(height: 20),
 
@@ -175,56 +197,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
               const SizedBox(height: 20),
 
               // --- Mic Button Section ---
-              Center(
-                child: GestureDetector(
-                  onTap: _toggleListening,
-                  child: AnimatedContainer(
-                    duration: const Duration(milliseconds: 250),
-                    width: 80,
-                    height: 80,
-                    decoration: BoxDecoration(
-                      color: _isListening ? theme.colorScheme.error : theme.colorScheme.primary,
-                      shape: BoxShape.circle,
-                      boxShadow: _isListening
-                          ? [
-                              BoxShadow(
-                                color: theme.colorScheme.error.withAlpha((0.35 * 0xFF).round()),
-                                blurRadius: 12,
-                                spreadRadius: 2,
-                              ),
-                            ]
-                          : [],
-                    ),
-                    child: Icon(
-                      _isListening ? Icons.mic_none : Icons.mic,
-                      color: theme.colorScheme.onPrimary,
-                      size: 36,
-                    ),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 10),
-              Center(
-                child: Text(
-                  _isListening ? 'Listening...' : "Tap or say 'Hey Vision' to start",
-                  style: TextStyle(
-                    color: theme.colorScheme.onSurface.withAlpha((0.7 * 0xFF).round()),
-                  ),
-                ),
-              ),
-              if (_lastWords.isNotEmpty)
-                Padding(
-                  padding: const EdgeInsets.only(top: 8.0),
-                  child: Center(
-                    child: Text(
-                      'Heard: "$_lastWords"',
-                      style: TextStyle(
-                        color: theme.colorScheme.onSurface.withOpacity(0.7),
-                        fontStyle: FontStyle.italic,
-                      ),
-                    ),
-                  ),
-                ),
+              _buildVoiceAssistantSection(theme),
             ],
           ),
         ),
@@ -261,35 +234,83 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  // Toggle speech recognition on/off
-  Future<void> _toggleListening() async {
-    if (!_isListening) {
-      bool available = await _speech.initialize(
-        onStatus: (val) => debugPrint('Speech status: $val'),
-        onError: (val) => debugPrint('Speech error: $val'),
-      );
-      if (available) {
-        setState(() => _isListening = true);
-        _speech.listen(onResult: (val) {
-          setState(() {
-            _lastWords = val.recognizedWords;
-          });
-          if (val.finalResult) {
-            // Show recognized final text
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text(_lastWords)),
-            );
-          }
-        });
-      } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Speech recognition unavailable')),
+  Widget _buildVoiceAssistantSection(ThemeData theme) {
+    return ValueListenableBuilder<bool>(
+      valueListenable: _voiceAssistant.isListening,
+      builder: (context, listening, _) {
+        return Column(
+          children: [
+            Center(
+              child: GestureDetector(
+                onTap: () => _voiceAssistant.captureCommandNow(),
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 250),
+                  width: 80,
+                  height: 80,
+                  decoration: BoxDecoration(
+                    color: listening
+                        ? theme.colorScheme.error
+                        : theme.colorScheme.primary,
+                    shape: BoxShape.circle,
+                    boxShadow: listening
+                        ? [
+                            BoxShadow(
+                              color:
+                                  theme.colorScheme.error.withAlpha((0.35 * 0xFF).round()),
+                              blurRadius: 12,
+                              spreadRadius: 2,
+                            ),
+                          ]
+                        : [],
+                  ),
+                  child: Icon(
+                    listening ? Icons.mic_none : Icons.mic,
+                    color: theme.colorScheme.onPrimary,
+                    size: 36,
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(height: 10),
+            ValueListenableBuilder<String>(
+              valueListenable: _voiceAssistant.assistantStateText,
+              builder: (context, status, __) {
+                return Center(
+                  child: Text(
+                    listening
+                        ? status
+                      : 'Tap anywhere or use mic to start voice command',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      color:
+                          theme.colorScheme.onSurface.withAlpha((0.7 * 0xFF).round()),
+                    ),
+                  ),
+                );
+              },
+            ),
+            ValueListenableBuilder<String>(
+              valueListenable: _voiceAssistant.lastHeardText,
+              builder: (context, heard, __) {
+                if (heard.trim().isEmpty) return const SizedBox.shrink();
+                return Padding(
+                  padding: const EdgeInsets.only(top: 8.0),
+                  child: Center(
+                    child: Text(
+                      'Heard: "$heard"',
+                      style: TextStyle(
+                        color: theme.colorScheme.onSurface.withValues(alpha: 0.7),
+                        fontStyle: FontStyle.italic,
+                      ),
+                    ),
+                  ),
+                );
+              },
+            ),
+          ],
         );
-      }
-    } else {
-      await _speech.stop();
-      setState(() => _isListening = false);
-    }
+      },
+    );
   }
 
   // ---------------- CARD BUILDER ----------------
@@ -298,6 +319,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     required IconData icon,
     required String title,
     required String subtitle,
+    double cardHeight = 120,
     VoidCallback? onTap,
   }) {
     final theme = Theme.of(context);
@@ -306,8 +328,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
       onTap: onTap,
       borderRadius: BorderRadius.circular(16),
       child: Container(
-        height: 120,
-        margin: const EdgeInsets.symmetric(horizontal: 5),
+        width: double.infinity,
+        height: cardHeight,
         decoration: BoxDecoration(
           color: theme.colorScheme.surface,
           borderRadius: BorderRadius.circular(16),

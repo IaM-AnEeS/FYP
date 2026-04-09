@@ -5,6 +5,8 @@ import 'package:blindly/Services/auth_service.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
 class SignInScreen extends StatefulWidget {
+  static final ValueNotifier<bool> isActive = ValueNotifier<bool>(false);
+
   const SignInScreen({super.key});
 
   @override
@@ -27,6 +29,7 @@ class _SignInScreenState extends State<SignInScreen>
   @override
   void initState() {
     super.initState();
+    SignInScreen.isActive.value = true;
 
     // Animation setup
     _animationController = AnimationController(
@@ -53,6 +56,7 @@ class _SignInScreenState extends State<SignInScreen>
 
   @override
   void dispose() {
+    SignInScreen.isActive.value = false;
     _animationController.dispose();
     emailController.dispose();
     passwordController.dispose();
@@ -86,8 +90,12 @@ class _SignInScreenState extends State<SignInScreen>
       }
     } catch (e) {
       if (mounted) {
+        final raw = e.toString();
+        final message = raw.contains(AuthService.suspendedAccountMessage)
+            ? AuthService.suspendedAccountMessage
+            : 'Error: $raw';
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error: ${e.toString()}')),
+          SnackBar(content: Text(message)),
         );
       }
     } finally {
@@ -104,8 +112,12 @@ class _SignInScreenState extends State<SignInScreen>
       }
     } catch (e) {
       if (mounted) {
+        final raw = e.toString();
+        final message = raw.contains(AuthService.suspendedAccountMessage)
+            ? AuthService.suspendedAccountMessage
+            : 'Google sign-in failed: $raw';
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Google sign-in failed: ${e.toString()}')),
+          SnackBar(content: Text(message)),
         );
       }
     } finally {
@@ -338,6 +350,19 @@ class _SignInScreenState extends State<SignInScreen>
                           ),
                         ),
                       ],
+                    ),
+                    const SizedBox(height: 10),
+                    TextButton(
+                      onPressed: () {
+                        Navigator.pushNamed(context, '/admin-login');
+                      },
+                      child: Text(
+                        'Login as a Admin',
+                        style: TextStyle(
+                          color: theme.colorScheme.primary,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
                     ),
                   ],
                 ),

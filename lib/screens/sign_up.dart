@@ -5,6 +5,8 @@ import 'package:blindly/Services/auth_service.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
 class SignUpScreen extends StatefulWidget {
+  static final ValueNotifier<bool> isActive = ValueNotifier<bool>(false);
+
   const SignUpScreen({super.key});
 
   @override
@@ -35,6 +37,7 @@ class _SignUpScreenState extends State<SignUpScreen>
   @override
   void initState() {
     super.initState();
+    SignUpScreen.isActive.value = true;
 
     _controller = AnimationController(
       vsync: this,
@@ -58,6 +61,7 @@ class _SignUpScreenState extends State<SignUpScreen>
 
   @override
   void dispose() {
+    SignUpScreen.isActive.value = false;
     _controller.dispose();
     nameController.dispose();
     emailController.dispose();
@@ -127,8 +131,12 @@ class _SignUpScreenState extends State<SignUpScreen>
     } catch (e) {
       print('[SIGNUP] Generic exception caught: $e');
       if (mounted) {
+        final raw = e.toString();
+        final message = raw.contains(AuthService.suspendedAccountMessage)
+            ? AuthService.suspendedAccountMessage
+            : 'Error: $raw';
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error: ${e.toString()}')),
+          SnackBar(content: Text(message)),
         );
       }
     } finally {
@@ -146,8 +154,12 @@ class _SignUpScreenState extends State<SignUpScreen>
       }
     } catch (e) {
       if (mounted) {
+        final raw = e.toString();
+        final message = raw.contains(AuthService.suspendedAccountMessage)
+            ? AuthService.suspendedAccountMessage
+            : 'Google sign-up failed: $raw';
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Google sign-up failed: ${e.toString()}')),
+          SnackBar(content: Text(message)),
         );
       }
     } finally {

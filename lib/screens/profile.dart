@@ -327,46 +327,6 @@ class _ProfileScreenState extends State<ProfileScreen>
               ),
               ListTile(
                 leading: Icon(
-                  Icons.settings,
-                  color: Theme.of(context).colorScheme.onSurface,
-                ),
-                title: Text(
-                  "App Settings",
-                  style: TextStyle(
-                    color: Theme.of(context).colorScheme.onSurface,
-                  ),
-                ),
-                trailing: Icon(
-                  Icons.arrow_forward_ios,
-                  color: Theme.of(
-                    context,
-                  ).colorScheme.onSurface.withOpacity(0.6),
-                  size: 16,
-                ),
-                onTap: () {},
-              ),
-              ListTile(
-                leading: Icon(
-                  Icons.support_agent,
-                  color: Theme.of(context).colorScheme.onSurface,
-                ),
-                title: Text(
-                  "Customer Support",
-                  style: TextStyle(
-                    color: Theme.of(context).colorScheme.onSurface,
-                  ),
-                ),
-                trailing: Icon(
-                  Icons.arrow_forward_ios,
-                  color: Theme.of(
-                    context,
-                  ).colorScheme.onSurface.withOpacity(0.6),
-                  size: 16,
-                ),
-                onTap: () {},
-              ),
-              ListTile(
-                leading: Icon(
                   Icons.logout,
                   color: Theme.of(context).colorScheme.error,
                 ),

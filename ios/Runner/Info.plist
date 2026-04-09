@@ -45,5 +45,7 @@
 	<true/>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
+	<key>NSCameraUsageDescription</key>
+	<string>Blindly needs camera access for real-time object detection to help you identify objects around you.</string>
 </dict>
 </plist>

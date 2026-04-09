@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 
 class Onboarding1 extends StatefulWidget {
+  static final ValueNotifier<bool> isActive = ValueNotifier<bool>(false);
+
   const Onboarding1({super.key});
 
   @override
@@ -16,6 +18,7 @@ class _SplashScreen2State extends State<Onboarding1>
   @override
   void initState() {
     super.initState();
+    Onboarding1.isActive.value = true;
 
     _controller = AnimationController(
       vsync: this,
@@ -34,6 +37,7 @@ class _SplashScreen2State extends State<Onboarding1>
 
   @override
   void dispose() {
+    Onboarding1.isActive.value = false;
     _controller.dispose();
     super.dispose();
   }

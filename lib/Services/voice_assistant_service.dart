@@ -12,6 +12,7 @@ import '../screens/navigation_screen.dart' as nav;
 import '../screens/text_reader.dart';
 import '../theme/color_scheme_manager.dart';
 import '../theme/theme_manager.dart';
+import '../utils/distance_utils.dart';
 import 'navigation_voice_bridge.dart';
 import 'voice_command_parser.dart';
 import 'voice_screen_access_policy.dart';
@@ -75,12 +76,7 @@ class _TtsVoiceCandidate {
   }
 }
 
-enum _VoiceMode {
-  idle,
-  commandListening,
-  speaking,
-  paused,
-}
+enum _VoiceMode { idle, commandListening, speaking, paused }
 
 class VoiceAssistantService {
   VoiceAssistantService._();
@@ -130,16 +126,20 @@ class VoiceAssistantService {
   final ValueNotifier<bool> assistantEnabled = ValueNotifier<bool>(true);
   final ValueNotifier<bool> isListening = ValueNotifier<bool>(false);
   final ValueNotifier<bool> microphoneGranted = ValueNotifier<bool>(false);
-  final ValueNotifier<String> assistantStateText =
-      ValueNotifier<String>('Voice assistant idle');
+  final ValueNotifier<String> assistantStateText = ValueNotifier<String>(
+    'Voice assistant idle',
+  );
   final ValueNotifier<String> lastHeardText = ValueNotifier<String>('');
   final ValueNotifier<String> activeRoute = ValueNotifier<String>('unknown');
-  final ValueNotifier<String> selectedVoiceType =
-      ValueNotifier<String>(_voiceTypeNeutral);
-  final ValueNotifier<String> selectedPersonality =
-      ValueNotifier<String>(_personalityFriendly);
-  final ValueNotifier<String> selectedVoiceLabel =
-      ValueNotifier<String>('Default device voice');
+  final ValueNotifier<String> selectedVoiceType = ValueNotifier<String>(
+    _voiceTypeNeutral,
+  );
+  final ValueNotifier<String> selectedPersonality = ValueNotifier<String>(
+    _personalityFriendly,
+  );
+  final ValueNotifier<String> selectedVoiceLabel = ValueNotifier<String>(
+    'Default device voice',
+  );
   final ValueNotifier<String> voiceSupportNote = ValueNotifier<String>(
     'Available voices depend on your Android device and TTS engine.',
   );
@@ -172,8 +172,9 @@ class VoiceAssistantService {
   DateTime _lastWakeDetectedAt = DateTime.fromMillisecondsSinceEpoch(0);
   DateTime _lastTapTriggeredAt = DateTime.fromMillisecondsSinceEpoch(0);
 
-  DateTime _lastDetectionAnnouncementAt =
-      DateTime.fromMillisecondsSinceEpoch(0);
+  DateTime _lastDetectionAnnouncementAt = DateTime.fromMillisecondsSinceEpoch(
+    0,
+  );
   String _lastDetectionSignature = '';
 
   double get pitch => _pitch;
@@ -197,10 +198,12 @@ class VoiceAssistantService {
     assistantEnabled.value = prefs.getBool(_prefVoiceEnabled) ?? true;
     _pitch = prefs.getDouble(_prefVoicePitch) ?? 1.0;
     _speechRate = prefs.getDouble(_prefVoiceRate) ?? 0.48;
-    selectedVoiceType.value =
-        _normalizeVoiceType(prefs.getString(_prefVoiceType));
-    selectedPersonality.value =
-        _normalizePersonality(prefs.getString(_prefVoicePersonality));
+    selectedVoiceType.value = _normalizeVoiceType(
+      prefs.getString(_prefVoiceType),
+    );
+    selectedPersonality.value = _normalizePersonality(
+      prefs.getString(_prefVoicePersonality),
+    );
 
     await _configureTts();
     await refreshAvailableVoices();
@@ -236,8 +239,7 @@ class VoiceAssistantService {
       if (voicesDynamic is List) {
         for (final dynamic item in voicesDynamic) {
           if (item is Map) {
-            final Map<String, String> normalized =
-                <String, String>{};
+            final Map<String, String> normalized = <String, String>{};
             item.forEach((dynamic key, dynamic value) {
               normalized[key.toString()] = value?.toString() ?? '';
             });
@@ -633,7 +635,8 @@ class VoiceAssistantService {
     if (summary == null || summary.isEmpty) return;
 
     final signature = '${mode.toLowerCase()}:${summary.toLowerCase()}';
-    final isDuplicate = signature == _lastDetectionSignature &&
+    final isDuplicate =
+        signature == _lastDetectionSignature &&
         now.difference(_lastDetectionAnnouncementAt) <
             const Duration(seconds: 12);
 
@@ -646,8 +649,14 @@ class VoiceAssistantService {
   }
 
   String? _buildDetectionSummary(String mode, List<Detection> detections) {
+    final normalizedMode = mode.toLowerCase();
+
     final sorted = List<Detection>.from(detections)
       ..sort((a, b) => b.confidence.compareTo(a.confidence));
+
+    if (normalizedMode == 'outdoor') {
+      return _buildOutdoorDetectionSummary(sorted);
+    }
 
     final indoorPriority = <String>{
       'plate',
@@ -659,21 +668,7 @@ class VoiceAssistantService {
       'bottle',
     };
 
-    final outdoorPriority = <String>{
-      'person',
-      'boy',
-      'girl',
-      'car',
-      'traffic light',
-      'bus',
-      'bicycle',
-      'motorcycle',
-      'truck',
-    };
-
-    final prioritySet = mode.toLowerCase() == 'indoor'
-        ? indoorPriority
-        : outdoorPriority;
+    final prioritySet = indoorPriority;
 
     final selected = <String>[];
 
@@ -706,6 +701,51 @@ class VoiceAssistantService {
     }
 
     return '${selected[0]}, ${selected[1]} and ${selected[2]} detected';
+  }
+
+  String? _buildOutdoorDetectionSummary(List<Detection> detections) {
+    if (detections.isEmpty) return null;
+
+    final outdoorPriority = <String>{
+      'person',
+      'boy',
+      'girl',
+      'car',
+      'traffic light',
+      'bus',
+      'bicycle',
+      'motorcycle',
+      'truck',
+    };
+
+    Detection? selected;
+
+    for (final detection in detections) {
+      final label = detection.label.trim().toLowerCase();
+      if (label.isEmpty) continue;
+
+      final hasDistance =
+          DistanceUtils.buildDisplayDistanceLabel(detection) != null;
+      if (hasDistance && outdoorPriority.contains(label)) {
+        selected = detection;
+        break;
+      }
+    }
+
+    selected ??= detections.firstWhere(
+      (d) => DistanceUtils.buildDisplayDistanceLabel(d) != null,
+      orElse: () => detections.first,
+    );
+
+    final spokenLabel = selected.label.trim().toLowerCase();
+    if (spokenLabel.isEmpty) return null;
+
+    final distanceText = DistanceUtils.buildDisplayDistanceLabel(selected);
+    if (distanceText == null) {
+      return '$spokenLabel detected';
+    }
+
+    return '$spokenLabel, $distanceText';
   }
 
   bool _canListen() {
@@ -841,12 +881,7 @@ class VoiceAssistantService {
       if (result.finalResult) {
         _commandCaptured = true;
         final sessionId = _commandSessionId;
-        unawaited(
-          _finalizeCommandListening(
-            sessionId,
-            forceText: recognized,
-          ),
-        );
+        unawaited(_finalizeCommandListening(sessionId, forceText: recognized));
       }
       return;
     }
@@ -1016,8 +1051,10 @@ class VoiceAssistantService {
         break;
       case VoiceActionType.goHome:
         await speak('Going to home screen.', resumeWakeListening: false);
-        navigatorKey.currentState
-            ?.pushNamedAndRemoveUntil('/dashboard', (_) => false);
+        navigatorKey.currentState?.pushNamedAndRemoveUntil(
+          '/dashboard',
+          (_) => false,
+        );
         break;
       case VoiceActionType.unknown:
         await speak(
@@ -1026,7 +1063,6 @@ class VoiceAssistantService {
         );
         break;
     }
-
   }
 
   Future<void> _finalizeCommandListening(
@@ -1038,8 +1074,7 @@ class VoiceAssistantService {
 
     _isFinalizingCommand = true;
 
-    final transcript =
-        (forceText != null && forceText.trim().isNotEmpty)
+    final transcript = (forceText != null && forceText.trim().isNotEmpty)
         ? forceText.trim()
         : _commandBestTranscript.trim();
 
@@ -1143,7 +1178,10 @@ class VoiceAssistantService {
       return;
     }
 
-    await speak('Detection is not currently running.', resumeWakeListening: false);
+    await speak(
+      'Detection is not currently running.',
+      resumeWakeListening: false,
+    );
   }
 
   bool _containsWakePhrase(String normalized) {

@@ -45,7 +45,7 @@ class DistanceUtils {
     // Only score objects with distance information
     if (detection.distanceCategory == null) return null;
 
-    // Distance priority: "very_close" > "close" > "medium" > "far"
+    // Distance priority: "very_near" > "near" > "medium" > "far"
     final distancePriority = _getDistancePriority(detection.distanceCategory!);
     if (distancePriority == null) return null;
 
@@ -60,8 +60,7 @@ class DistanceUtils {
     );
 
     // Normalize distance from center (0-1, where 0 = center)
-    final maxDistance =
-        math.sqrt(math.pow(centerX, 2) + math.pow(centerY, 2));
+    final maxDistance = math.sqrt(math.pow(centerX, 2) + math.pow(centerY, 2));
     final centerBonus =
         1.0 - (distanceFromCenter / maxDistance).clamp(0.0, 1.0);
 
@@ -70,9 +69,8 @@ class DistanceUtils {
 
     // Combine: distance is most important, center position is secondary,
     // confidence is tertiary
-    final score = distancePriority * 1000 +
-        centerBonus * 100 +
-        confidenceBonus * 10;
+    final score =
+        distancePriority * 1000 + centerBonus * 100 + confidenceBonus * 10;
 
     return score;
   }
@@ -81,10 +79,13 @@ class DistanceUtils {
   /// Higher = higher priority to speak.
   static double? _getDistancePriority(String distanceCategory) {
     return switch (distanceCategory.toLowerCase()) {
-      'very_close' => 4.0,
-      'close' => 3.0,
+      'very_near' => 4.0,
+      'near' => 3.0,
       'medium' => 2.0,
       'far' => 1.0,
+      // Legacy aliases kept for backward compatibility with older payloads.
+      'very_close' => 4.0,
+      'close' => 3.0,
       _ => null,
     };
   }
@@ -115,24 +116,37 @@ class DistanceUtils {
   /// Builds a human-friendly speech string from a detection.
   /// Example: "person, about 1 to 2 steps away"
   static String buildSpeechText(Detection detection) {
-    final label = detection.label;
-    final distanceLabel = detection.distanceLabel ?? 'unknown distance';
-    return '$label, $distanceLabel';
+    final label = detection.label.trim();
+    final safeLabel = label.isEmpty ? 'object' : label;
+    final distanceLabel = buildDisplayDistanceLabel(detection);
+
+    if (distanceLabel == null) {
+      return '$safeLabel detected';
+    }
+
+    return '$safeLabel, $distanceLabel';
   }
 
   /// Generates a unique identifier for a detection state.
   /// Used to detect if the situation has significantly changed
   /// and we should speak again.
   static String generateDetectionSignature(
-      List<Detection> detections, int imageWidth, int imageHeight) {
+    List<Detection> detections,
+    int imageWidth,
+    int imageHeight,
+  ) {
     if (detections.isEmpty) return 'empty';
 
     // Get the best object for speech
     final bestObj = selectObjectForSpeech(detections, imageWidth, imageHeight);
     if (bestObj == null) return 'no_distance_info';
 
-    // Create a signature: label + distance_category
-    // This way, we only speak again if the primary object or its distance changes
-    return '${bestObj.label}:${bestObj.distanceCategory}:${bestObj.confidence.toStringAsFixed(1)}';
+    final distanceToken =
+        buildDisplayDistanceLabel(bestObj) ??
+        bestObj.distanceCategory ??
+        'unknown';
+
+    // This signature changes only when the primary label or distance meaningfully changes.
+    return '${bestObj.label}:${distanceToken.toLowerCase()}';
   }
 }

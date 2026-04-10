@@ -13,13 +13,11 @@ import '../Services/navigation_voice_bridge.dart';
 import '../Services/voice_assistant_service.dart';
 import '../models/detection.dart';
 import '../painters/detection_painter.dart';
+import '../utils/distance_utils.dart';
 
 const bool kShowNavigationDebugPanel = true;
 
-enum NavigationMode {
-  indoor,
-  outdoor,
-}
+enum NavigationMode { indoor, outdoor }
 
 class NavigationScreen extends StatefulWidget {
   final String initialMode;
@@ -487,8 +485,9 @@ class _NavigationScreenState extends State<NavigationScreen>
           final modeText = activeMode == NavigationMode.indoor
               ? 'indoor'
               : 'outdoor';
-          final backendUrl =
-              DetectionService.baseUrlForMode(_backendModeFor(activeMode));
+          final backendUrl = DetectionService.baseUrlForMode(
+            _backendModeFor(activeMode),
+          );
 
           unawaited(
             VoiceAssistantService.instance.announceDetections(
@@ -588,8 +587,9 @@ class _NavigationScreenState extends State<NavigationScreen>
           backgroundColor: selected
               ? theme.colorScheme.primary
               : theme.colorScheme.surface.withAlpha((0.9 * 0xFF).round()),
-          foregroundColor:
-              selected ? theme.colorScheme.onPrimary : theme.colorScheme.onSurface,
+          foregroundColor: selected
+              ? theme.colorScheme.onPrimary
+              : theme.colorScheme.onSurface,
         ),
         child: Text(_modeTitle(mode)),
       ),
@@ -626,7 +626,9 @@ class _NavigationScreenState extends State<NavigationScreen>
                   ? Icons.home_work_outlined
                   : Icons.navigation,
               size: 60,
-              color: theme.colorScheme.onSurface.withAlpha((0.7 * 0xFF).round()),
+              color: theme.colorScheme.onSurface.withAlpha(
+                (0.7 * 0xFF).round(),
+              ),
             ),
             const SizedBox(height: 12),
             Text(
@@ -641,8 +643,9 @@ class _NavigationScreenState extends State<NavigationScreen>
             Text(
               _idleStatusFor(mode),
               style: TextStyle(
-                color:
-                    theme.colorScheme.onSurface.withAlpha((0.7 * 0xFF).round()),
+                color: theme.colorScheme.onSurface.withAlpha(
+                  (0.7 * 0xFF).round(),
+                ),
                 fontSize: 14,
               ),
             ),
@@ -709,6 +712,8 @@ class _NavigationScreenState extends State<NavigationScreen>
                   detections: _detections,
                   imageWidth: _imageWidth,
                   imageHeight: _imageHeight,
+                  showDistance: mode == NavigationMode.outdoor,
+                  showConfidence: mode == NavigationMode.indoor,
                 ),
               );
             },
@@ -728,27 +733,42 @@ class _NavigationScreenState extends State<NavigationScreen>
                   children: [
                     Text(
                       'Mode: ${_modeTitle(mode)}',
-                      style:
-                          const TextStyle(color: Colors.greenAccent, fontSize: 11),
+                      style: const TextStyle(
+                        color: Colors.greenAccent,
+                        fontSize: 11,
+                      ),
                     ),
                     Text(
                       'URL: ${DetectionService.baseUrlForMode(_backendModeFor(mode))}',
-                      style:
-                          const TextStyle(color: Colors.greenAccent, fontSize: 11),
+                      style: const TextStyle(
+                        color: Colors.greenAccent,
+                        fontSize: 11,
+                      ),
                     ),
                     Text(
                       'Inference: ${_lastInferenceMs.toStringAsFixed(0)} ms',
-                      style:
-                          const TextStyle(color: Colors.greenAccent, fontSize: 11),
+                      style: const TextStyle(
+                        color: Colors.greenAccent,
+                        fontSize: 11,
+                      ),
                     ),
                     Text(
                       'Detections: $_detectionCount',
-                      style:
-                          const TextStyle(color: Colors.greenAccent, fontSize: 11),
+                      style: const TextStyle(
+                        color: Colors.greenAccent,
+                        fontSize: 11,
+                      ),
                     ),
                   ],
                 ),
               ),
+            ),
+          if (mode == NavigationMode.outdoor && _detections.isNotEmpty)
+            Positioned(
+              left: 8,
+              right: 8,
+              bottom: 48,
+              child: _buildOutdoorDistanceChips(theme),
             ),
           Positioned(
             bottom: 0,
@@ -773,6 +793,67 @@ class _NavigationScreenState extends State<NavigationScreen>
     );
   }
 
+  Widget _buildOutdoorDistanceChips(ThemeData theme) {
+    final seen = <String>{};
+    final chipTexts = <String>[];
+
+    for (final detection in _detections) {
+      final label = detection.label.trim();
+      if (label.isEmpty) continue;
+
+      final distance = DistanceUtils.buildDisplayDistanceLabel(detection);
+      if (distance == null) continue;
+
+      final key = '${label.toLowerCase()}|${distance.toLowerCase()}';
+      if (!seen.add(key)) continue;
+
+      chipTexts.add('$label - $distance');
+    }
+
+    if (chipTexts.isEmpty) {
+      return const SizedBox.shrink();
+    }
+
+    const maxVisible = 3;
+    final visible = chipTexts.take(maxVisible).toList();
+    final hidden = chipTexts.length - visible.length;
+
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: Row(
+        children: [
+          for (final text in visible)
+            Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: _distanceChip(theme, text),
+            ),
+          if (hidden > 0) _distanceChip(theme, '+$hidden more'),
+        ],
+      ),
+    );
+  }
+
+  Widget _distanceChip(ThemeData theme, String text) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: Colors.black.withAlpha((0.62 * 0xFF).round()),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(
+          color: theme.colorScheme.primary.withAlpha((0.55 * 0xFF).round()),
+        ),
+      ),
+      child: Text(
+        text,
+        style: const TextStyle(
+          color: Colors.white,
+          fontSize: 12,
+          fontWeight: FontWeight.w500,
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -790,9 +871,7 @@ class _NavigationScreenState extends State<NavigationScreen>
             padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
             child: _buildModeButtons(),
           ),
-          Expanded(
-            child: _buildLiveDetectionPanel(theme, panelMode),
-          ),
+          Expanded(child: _buildLiveDetectionPanel(theme, panelMode)),
           Padding(
             padding: const EdgeInsets.all(12),
             child: SizedBox(
@@ -800,7 +879,9 @@ class _NavigationScreenState extends State<NavigationScreen>
               child: ElevatedButton.icon(
                 onPressed: _onBottomButtonPressed,
                 icon: Icon(
-                  running ? Icons.stop_circle_outlined : Icons.play_arrow_rounded,
+                  running
+                      ? Icons.stop_circle_outlined
+                      : Icons.play_arrow_rounded,
                 ),
                 label: Text(running ? 'Tap to Stop' : 'Tap to Start'),
                 style: ElevatedButton.styleFrom(

@@ -15,13 +15,42 @@ class DetectionResponse {
   });
 
   factory DetectionResponse.fromJson(Map<String, dynamic> json) {
+    final rawDetections = json['detections'];
+    final parsedDetections = rawDetections is List
+        ? rawDetections
+              .map((d) {
+                if (d is Map<String, dynamic>) return Detection.fromJson(d);
+                if (d is Map) {
+                  return Detection.fromJson(Map<String, dynamic>.from(d));
+                }
+                return null;
+              })
+              .whereType<Detection>()
+              .toList()
+        : <Detection>[];
+
     return DetectionResponse(
-      detections: (json['detections'] as List<dynamic>)
-          .map((d) => Detection.fromJson(d as Map<String, dynamic>))
-          .toList(),
-      imageWidth: json['image_width'] as int,
-      imageHeight: json['image_height'] as int,
-      inferenceMs: (json['inference_ms'] as num).toDouble(),
+      detections: parsedDetections,
+      imageWidth: _toInt(json['image_width']),
+      imageHeight: _toInt(json['image_height']),
+      inferenceMs: _toDouble(json['inference_ms']),
     );
+  }
+
+  static int _toInt(dynamic value) {
+    if (value is int) return value;
+    if (value is num) return value.toInt();
+    if (value is String) {
+      return int.tryParse(value.trim()) ?? 0;
+    }
+    return 0;
+  }
+
+  static double _toDouble(dynamic value) {
+    if (value is num) return value.toDouble();
+    if (value is String) {
+      return double.tryParse(value.trim()) ?? 0.0;
+    }
+    return 0.0;
   }
 }

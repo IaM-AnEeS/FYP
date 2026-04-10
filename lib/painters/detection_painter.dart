@@ -13,11 +13,15 @@ class DetectionPainter extends CustomPainter {
   final List<Detection> detections;
   final int imageWidth;
   final int imageHeight;
+  final bool showDistance;
+  final bool showConfidence;
 
   DetectionPainter({
     required this.detections,
     required this.imageWidth,
     required this.imageHeight,
+    this.showDistance = true,
+    this.showConfidence = true,
   });
 
   @override
@@ -76,13 +80,24 @@ class DetectionPainter extends CustomPainter {
       // Draw bounding box
       canvas.drawRect(clampedRect, boxPaint);
 
-      // Build label lines: object name, distance (if available), confidence.
-      final confidenceText =
-          'confidence ${(det.confidence * 100).toStringAsFixed(0)}%';
-      final distanceText = DistanceUtils.buildDisplayDistanceLabel(det);
-      final label = distanceText == null
-          ? '${det.label}\n$confidenceText'
-          : '${det.label}\n$distanceText\n$confidenceText';
+      final labelLines = <String>[];
+      final objectLabel = det.label.trim();
+      labelLines.add(objectLabel.isEmpty ? 'object' : objectLabel);
+
+      if (showDistance) {
+        final distanceText = DistanceUtils.buildDisplayDistanceLabel(det);
+        if (distanceText != null) {
+          labelLines.add(distanceText);
+        }
+      }
+
+      if (showConfidence) {
+        labelLines.add(
+          'confidence ${(det.confidence * 100).toStringAsFixed(0)}%',
+        );
+      }
+
+      final label = labelLines.join('\n');
 
       final textSpan = TextSpan(
         text: label,
@@ -96,7 +111,7 @@ class DetectionPainter extends CustomPainter {
       final textPainter = TextPainter(
         text: textSpan,
         textDirection: TextDirection.ltr,
-        maxLines: 3,
+        maxLines: math.max(1, math.min(3, labelLines.length)),
       )..layout(maxWidth: math.min(220, size.width * 0.55));
 
       // Position label above top-left of box; if it would go off-screen,
@@ -106,16 +121,11 @@ class DetectionPainter extends CustomPainter {
 
       final labelWidth = textPainter.width + 10;
       final labelHeight = textPainter.height + 6;
-        final labelX = clampedRect.left
+      final labelX = clampedRect.left
           .clamp(0.0, math.max(0.0, size.width - labelWidth))
           .toDouble();
 
-      final labelRect = Rect.fromLTWH(
-        labelX,
-        labelY,
-        labelWidth,
-        labelHeight,
-      );
+      final labelRect = Rect.fromLTWH(labelX, labelY, labelWidth, labelHeight);
       canvas.drawRRect(
         RRect.fromRectAndRadius(labelRect, const Radius.circular(4)),
         bgPaint,
@@ -129,7 +139,9 @@ class DetectionPainter extends CustomPainter {
   bool shouldRepaint(covariant DetectionPainter oldDelegate) {
     return oldDelegate.detections != detections ||
         oldDelegate.imageWidth != imageWidth ||
-        oldDelegate.imageHeight != imageHeight;
+        oldDelegate.imageHeight != imageHeight ||
+        oldDelegate.showDistance != showDistance ||
+        oldDelegate.showConfidence != showConfidence;
   }
 
   /// Returns a consistent colour per COCO class-id.

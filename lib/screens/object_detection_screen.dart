@@ -5,7 +5,9 @@ import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:image/image.dart' as img;
 import '../Services/detection_service.dart';
+import '../Services/voice_assistant_service.dart';
 import '../models/detection.dart';
+import '../models/unified_detect_response.dart';
 import '../painters/detection_painter.dart';
 
 // ┌─────────────────────────────────────────────────────────────────────────┐
@@ -199,8 +201,8 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
       if (_isDisposing || !mounted) return;
 
       // Send to backend
-      final PredictResult result =
-          await DetectionService.predictOutdoor(jpegToSend);
+      final UnifiedDetectResult result =
+          await DetectionService.detectUnified(jpegToSend);
 
       if (!mounted || _isDisposing) return;
 
@@ -210,24 +212,28 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
         });
       } else {
         final resp = result.response!;
-        if (resp.detections.isEmpty) {
-          setState(() {
-            _detections = [];
-            _detectionCount = 0;
-            _lastInferenceMs = resp.inferenceMs;
+        setState(() {
+          _detections = resp.detections;
+          _detectionCount = resp.detections.length;
+          _lastInferenceMs = resp.inferenceMs ?? 0;
+          
+          if (resp.detections.isEmpty) {
             _statusText = 'No objects detected';
-          });
-        } else {
-          setState(() {
-            _detections = resp.detections;
-            _imageWidth = resp.imageWidth;
-            _imageHeight = resp.imageHeight;
-            _detectionCount = resp.detections.length;
-            _lastInferenceMs = resp.inferenceMs;
+          } else {
             _statusText =
-                '${resp.detections.length} object(s) · ${resp.inferenceMs.toStringAsFixed(0)} ms';
-          });
-        }
+                '${resp.detections.length} object(s) · ${resp.inferenceMs?.toStringAsFixed(0) ?? "0"} ms';
+          }
+        });
+
+        // Trigger smart speech via VoiceAssistantService
+        unawaited(
+          VoiceAssistantService.instance.speakDetectionSentence(
+            resp.sentence,
+            detections: resp.detections,
+            imageWidth: _imageWidth,
+            imageHeight: _imageHeight,
+          ),
+        );
       }
     } catch (e) {
       // Catch-all so the capture loop NEVER breaks.

@@ -4,9 +4,8 @@ enum VoiceActionType {
   openAiChat,
   openVoiceSettings,
   openTextReader,
-  openNavigation,
-  openIndoorNavigation,
-  openOutdoorNavigation,
+  openObjectDetection,
+  startObjectDetection,
   setThemeLight,
   setThemeDark,
   setThemeSystem,
@@ -17,8 +16,6 @@ enum VoiceActionType {
   setColorPurple,
   setColorOrange,
   setColorSeaGreen,
-  startIndoorDetection,
-  startOutdoorDetection,
   stopDetection,
   goHome,
   unknown,
@@ -64,16 +61,11 @@ class VoiceCommandParser {
     'start text reader',
     'open camera for text reading',
     'read text',
+    'open object detection',
+    'start object detection',
     'open detection',
-    'open navigate',
-    'go to navigate',
-    'open navigation',
-    'open indoor detection',
-    'start indoor detection',
-    'open outdoor detection',
-    'start outdoor detection',
-    'open indoor navigation',
-    'open outdoor navigation',
+    'start detection',
+    'go to object detection',
     'stop detection',
     'open home',
     'go home',
@@ -82,8 +74,8 @@ class VoiceCommandParser {
   static String normalize(String text) {
     return text
         .toLowerCase()
-        .replaceAll(RegExp(r'[^a-z0-9\\s]'), ' ')
-        .replaceAll(RegExp(r'\\s+'), ' ')
+        .replaceAll(RegExp(r'[^a-z0-9\s]'), ' ')
+        .replaceAll(RegExp(r'\s+'), ' ')
         .trim();
   }
 
@@ -207,18 +199,6 @@ class VoiceCommandParser {
       return _intent(VoiceActionType.stopDetection, rawText, normalized);
     }
 
-    final bool mentionsIndoor = _hasAnyWord(normalized, [
-      'indoor',
-      'indore',
-      'inside',
-      'internal',
-    ]);
-    final bool mentionsOutdoor = _hasAnyWord(normalized, [
-      'outdoor',
-      'outside',
-      'external',
-      'exterior',
-    ]);
     final bool mentionsDetection = _hasAny(normalized, [
       'detection',
       'detect',
@@ -229,46 +209,17 @@ class VoiceCommandParser {
       'begin',
       'run',
       'open',
+      'go',
     ]);
 
-    if (!mentionsIndoor &&
-        !mentionsOutdoor &&
-        mentionsDetection &&
-        mentionsStartOrOpen) {
-      return _intent(VoiceActionType.openNavigation, rawText, normalized);
-    }
-
-    if (mentionsIndoor && mentionsDetection && mentionsStartOrOpen) {
-      return _intent(VoiceActionType.startIndoorDetection, rawText, normalized);
-    }
-
-    if (mentionsOutdoor && mentionsDetection && mentionsStartOrOpen) {
-      return _intent(VoiceActionType.startOutdoorDetection, rawText, normalized);
-    }
-
-    if (_hasAny(normalized, ['start', 'begin', 'run']) &&
-        _hasWord(normalized, 'indoor') &&
-        _hasAny(normalized, ['detection', 'detect', 'navigation'])) {
-      return _intent(VoiceActionType.startIndoorDetection, rawText, normalized);
-    }
-
-    if (_hasAny(normalized, ['start', 'begin', 'run']) &&
-        _hasWord(normalized, 'outdoor') &&
-        _hasAny(normalized, ['detection', 'detect', 'navigation'])) {
-      return _intent(VoiceActionType.startOutdoorDetection, rawText, normalized);
+    if (mentionsDetection && mentionsStartOrOpen) {
+      if (_hasWord(normalized, 'start') || _hasWord(normalized, 'run') || _hasWord(normalized, 'begin')) {
+        return _intent(VoiceActionType.startObjectDetection, rawText, normalized);
+      }
+      return _intent(VoiceActionType.openObjectDetection, rawText, normalized);
     }
 
     if (_hasWord(normalized, 'open') || _hasWord(normalized, 'go')) {
-      if (_hasWord(normalized, 'indoor') &&
-          _hasAny(normalized, ['navigation', 'navigate'])) {
-        return _intent(VoiceActionType.openIndoorNavigation, rawText, normalized);
-      }
-
-      if (_hasWord(normalized, 'outdoor') &&
-          _hasAny(normalized, ['navigation', 'navigate'])) {
-        return _intent(VoiceActionType.openOutdoorNavigation, rawText, normalized);
-      }
-
       if (_hasAny(normalized, ['voice settings', 'voice setting'])) {
         return _intent(VoiceActionType.openVoiceSettings, rawText, normalized);
       }
@@ -307,51 +258,6 @@ class VoiceCommandParser {
       if (_hasAny(normalized, ['settings', 'setting'])) {
         return _intent(VoiceActionType.openSettings, rawText, normalized);
       }
-
-      if (_hasAny(normalized, ['navigation', 'navigate'])) {
-        return _intent(VoiceActionType.openNavigation, rawText, normalized);
-      }
-    }
-
-    if (_hasWord(normalized, 'indoor') &&
-        _hasAny(normalized, ['navigation', 'navigate'])) {
-      return _intent(VoiceActionType.openIndoorNavigation, rawText, normalized);
-    }
-
-    if (_hasWord(normalized, 'outdoor') &&
-        _hasAny(normalized, ['navigation', 'navigate'])) {
-      return _intent(VoiceActionType.openOutdoorNavigation, rawText, normalized);
-    }
-
-    if (_hasAny(normalized, ['voice settings', 'voice setting'])) {
-      return _intent(VoiceActionType.openVoiceSettings, rawText, normalized);
-    }
-
-    if (_hasAny(normalized, ['text reader', 'text reading', 'read text'])) {
-      return _intent(
-        VoiceActionType.openTextReader,
-        rawText,
-        normalized,
-        preferCamera: _hasAny(normalized, ['camera', 'capture']),
-      );
-    }
-
-    if (_hasAny(normalized, [
-      'ai chat',
-      'a i chat',
-      'assistant chat',
-      'chat bot',
-      'chatbot',
-    ])) {
-      return _intent(VoiceActionType.openAiChat, rawText, normalized);
-    }
-
-    if (_hasAny(normalized, ['settings', 'setting'])) {
-      return _intent(VoiceActionType.openSettings, rawText, normalized);
-    }
-
-    if (_hasAny(normalized, ['navigation', 'navigate'])) {
-      return _intent(VoiceActionType.openNavigation, rawText, normalized);
     }
 
     return _intent(VoiceActionType.unknown, rawText, normalized);

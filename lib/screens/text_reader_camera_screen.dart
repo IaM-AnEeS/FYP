@@ -1,15 +1,22 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
+import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:speech_to_text/speech_to_text.dart' as stt;
+
+import '../Services/voice_assistant_service.dart';
 
 class TextReaderCameraScreen extends StatefulWidget {
   final int countdownSeconds;
+  final bool liveMode;
 
   const TextReaderCameraScreen({
     super.key,
     this.countdownSeconds = 5,
+    this.liveMode = false,
   });
 
   @override
@@ -20,6 +27,14 @@ class _TextReaderCameraScreenState extends State<TextReaderCameraScreen>
     with WidgetsBindingObserver {
   CameraController? _cameraController;
   Timer? _countdownTimer;
+  Timer? _liveScanTimer;
+
+  final TextRecognizer _textRecognizer = TextRecognizer(
+    script: TextRecognitionScript.latin,
+  );
+  final stt.SpeechToText _localSpeech = stt.SpeechToText();
+  bool _localSpeechReady = false;
+  bool _isListeningForGoBack = false;
 
   bool _isInitializingCamera = true;
   bool _isCameraReady = false;
@@ -29,6 +44,7 @@ class _TextReaderCameraScreenState extends State<TextReaderCameraScreen>
   bool _hasReturnedCapture = false;
 
   String _statusText = 'Preparing camera...';
+  String _liveRecognizedText = '';
   int _remainingSeconds = 0;
 
   @override
@@ -36,7 +52,7 @@ class _TextReaderCameraScreenState extends State<TextReaderCameraScreen>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _remainingSeconds = widget.countdownSeconds;
-    unawaited(_initializeCameraAndStartCountdown());
+    unawaited(_initializeCameraAndStartFlow());
   }
 
   @override
@@ -46,7 +62,7 @@ class _TextReaderCameraScreenState extends State<TextReaderCameraScreen>
     if (state == AppLifecycleState.inactive ||
         state == AppLifecycleState.paused ||
         state == AppLifecycleState.detached) {
-      _cancelCountdown();
+      _cancelTimers();
       unawaited(_disposeCameraController());
     }
   }
@@ -55,12 +71,21 @@ class _TextReaderCameraScreenState extends State<TextReaderCameraScreen>
   void dispose() {
     _isDisposing = true;
     WidgetsBinding.instance.removeObserver(this);
-    _cancelCountdown();
+    _cancelTimers();
+    _textRecognizer.close();
+    unawaited(_localSpeech.stop());
     unawaited(_disposeCameraController());
     super.dispose();
   }
 
-  Future<void> _initializeCameraAndStartCountdown() async {
+  void _cancelTimers() {
+    _countdownTimer?.cancel();
+    _countdownTimer = null;
+    _liveScanTimer?.cancel();
+    _liveScanTimer = null;
+  }
+
+  Future<void> _initializeCameraAndStartFlow() async {
     final PermissionStatus status = await Permission.camera.request();
 
     if (!mounted || _isDisposing) return;
@@ -103,7 +128,7 @@ class _TextReaderCameraScreenState extends State<TextReaderCameraScreen>
 
     final CameraController controller = CameraController(
       selectedCamera,
-      ResolutionPreset.high,
+      widget.liveMode ? ResolutionPreset.medium : ResolutionPreset.high,
       enableAudio: false,
       imageFormatGroup: ImageFormatGroup.jpeg,
     );
@@ -131,25 +156,30 @@ class _TextReaderCameraScreenState extends State<TextReaderCameraScreen>
     setState(() {
       _isInitializingCamera = false;
       _isCameraReady = true;
-      _statusText = 'Auto capture in $_remainingSeconds seconds';
+      _statusText = widget.liveMode
+          ? 'Live Reading Active'
+          : 'Auto capture in $_remainingSeconds seconds';
     });
 
-    _startCountdown();
+    if (widget.liveMode) {
+      _startLiveScan();
+    } else {
+      _startCountdown();
+    }
   }
 
   void _startCountdown() {
     if (!_isCameraReady || _isTakingPicture) return;
 
-    _cancelCountdown();
-
+    _countdownTimer?.cancel();
     _countdownTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
       if (!mounted || _isDisposing || !_isCameraReady || _isTakingPicture) {
-        _cancelCountdown();
+        timer.cancel();
         return;
       }
 
       if (_remainingSeconds <= 1) {
-        _cancelCountdown();
+        timer.cancel();
         setState(() {
           _remainingSeconds = 0;
           _statusText = 'Capturing image...';
@@ -165,9 +195,97 @@ class _TextReaderCameraScreenState extends State<TextReaderCameraScreen>
     });
   }
 
-  void _cancelCountdown() {
-    _countdownTimer?.cancel();
-    _countdownTimer = null;
+  void _startLiveScan() {
+    if (!_isCameraReady || _isDisposing) return;
+
+    _liveScanTimer?.cancel();
+    _liveScanTimer = Timer.periodic(const Duration(milliseconds: 1500), (timer) {
+      if (!mounted || _isDisposing || !_isCameraReady) {
+        timer.cancel();
+        return;
+      }
+      unawaited(_performLiveOcr());
+    });
+  }
+
+  Future<void> _performLiveOcr() async {
+    if (_isTakingPicture || _isDisposing) return;
+    final controller = _cameraController;
+    if (controller == null || !controller.value.isInitialized) return;
+
+    try {
+      _isTakingPicture = true;
+      final XFile photo = await controller.takePicture();
+      if (_isDisposing || !mounted) return;
+
+      final InputImage inputImage = InputImage.fromFilePath(photo.path);
+      final RecognizedText result = await _textRecognizer.processImage(inputImage);
+      
+      // Clean up the temporary photo immediately
+      final file = File(photo.path);
+      if (await file.exists()) {
+        await file.delete();
+      }
+
+      final String text = result.text.trim();
+      if (!mounted || _isDisposing) return;
+
+      if (text.isNotEmpty) {
+        setState(() {
+          _liveRecognizedText = text;
+        });
+        // Speak using the voice assistant's specialized live OCR logic
+        unawaited(VoiceAssistantService.instance.speakLiveOcrText(text));
+      }
+    } catch (e) {
+      debugPrint('Live OCR error: $e');
+    } finally {
+      _isTakingPicture = false;
+    }
+  }
+
+  Future<void> _handleTapForGoBack() async {
+    if (_isListeningForGoBack || _isDisposing) return;
+
+    if (!Platform.isAndroid) return;
+
+    final micStatus = await Permission.microphone.request();
+    if (!micStatus.isGranted) return;
+
+    if (!_localSpeechReady) {
+      _localSpeechReady = await _localSpeech.initialize();
+    }
+
+    if (!_localSpeechReady || !mounted) return;
+
+    setState(() {
+      _isListeningForGoBack = true;
+    });
+
+    await VoiceAssistantService.instance.speak(
+      'Listening. Say go back to exit.',
+      resumeWakeListening: false,
+      forceWhenDisabled: true,
+    );
+
+    await _localSpeech.listen(
+      onResult: (result) {
+        final heard = result.recognizedWords.toLowerCase();
+        if (heard.contains('go back') || heard.contains('back') || heard.contains('exit')) {
+          _localSpeech.stop();
+          Navigator.of(context).pop();
+        }
+      },
+      listenFor: const Duration(seconds: 4),
+      pauseFor: const Duration(seconds: 2),
+    );
+
+    await Future.delayed(const Duration(seconds: 4));
+    if (mounted) {
+      setState(() {
+        _isListeningForGoBack = false;
+      });
+    }
   }
 
   Future<void> _disposeCameraController() async {
@@ -180,9 +298,7 @@ class _TextReaderCameraScreenState extends State<TextReaderCameraScreen>
       if (controller.value.isInitialized) {
         await controller.dispose();
       }
-    } catch (_) {
-      // Keep this screen safe during rapid navigation.
-    }
+    } catch (_) {}
   }
 
   Future<void> _takePictureAndReturn() async {
@@ -207,17 +323,11 @@ class _TextReaderCameraScreenState extends State<TextReaderCameraScreen>
       if (!mounted || _isDisposing) return;
 
       _hasReturnedCapture = true;
-      _cancelCountdown();
+      _cancelTimers();
       await _disposeCameraController();
 
       if (!mounted || _isDisposing) return;
       Navigator.of(context).pop<String>(photo.path);
-    } on CameraException {
-      if (!mounted || _isDisposing) return;
-      setState(() {
-        _isTakingPicture = false;
-        _statusText = 'Capture failed. Please try again.';
-      });
     } catch (_) {
       if (!mounted || _isDisposing) return;
       setState(() {
@@ -232,8 +342,7 @@ class _TextReaderCameraScreenState extends State<TextReaderCameraScreen>
       return _buildCenteredMessage(
         theme,
         title: 'Camera Permission Needed',
-        message:
-            'Please allow camera permission to use timed text capture and try again.',
+        message: 'Please allow camera permission to use text capture.',
       );
     }
 
@@ -259,38 +368,82 @@ class _TextReaderCameraScreenState extends State<TextReaderCameraScreen>
       fit: StackFit.expand,
       children: [
         CameraPreview(controller),
+        
+        // --- Header Status ---
         Positioned(
           top: 24,
           left: 16,
           right: 16,
           child: _buildStatusChip(theme),
         ),
-        if (_remainingSeconds > 0)
+
+        // --- Live OCR Result Overlay ---
+        if (widget.liveMode && _liveRecognizedText.isNotEmpty)
+          Positioned(
+            bottom: 40,
+            left: 20,
+            right: 20,
+            child: Container(
+              constraints: const BoxConstraints(maxHeight: 180),
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: Colors.black.withValues(alpha: 0.7),
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: Colors.white24),
+              ),
+              child: SingleChildScrollView(
+                child: Text(
+                  _liveRecognizedText,
+                  style: const TextStyle(color: Colors.white, fontSize: 16, height: 1.4),
+                ),
+              ),
+            ),
+          ),
+
+        // --- Countdown indicator ---
+        if (!widget.liveMode && _remainingSeconds > 0)
           Center(
             child: Container(
               padding: const EdgeInsets.all(28),
               decoration: BoxDecoration(
                 color: Colors.black.withValues(alpha: 0.55),
                 shape: BoxShape.circle,
-                border: Border.all(
-                  color: Colors.white.withValues(alpha: 0.75),
-                  width: 2,
-                ),
+                border: Border.all(color: Colors.white70, width: 2),
               ),
               child: Text(
                 '$_remainingSeconds',
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 56,
-                  fontWeight: FontWeight.bold,
+                style: const TextStyle(color: Colors.white, fontSize: 56, fontWeight: FontWeight.bold),
+              ),
+            ),
+          ),
+
+        // --- Listening indicator ---
+        if (_isListeningForGoBack)
+          Positioned(
+            top: 100,
+            left: 0,
+            right: 0,
+            child: Center(
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                decoration: BoxDecoration(
+                  color: theme.colorScheme.primary.withValues(alpha: 0.9),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: const Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.mic, color: Colors.white, size: 20),
+                    SizedBox(width: 8),
+                    Text('Listening for "Go Back"', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                  ],
                 ),
               ),
             ),
           ),
-        if (_isTakingPicture)
-          const Center(
-            child: CircularProgressIndicator(color: Colors.white),
-          ),
+
+        if (_isTakingPicture && !widget.liveMode)
+          const Center(child: CircularProgressIndicator(color: Colors.white)),
       ],
     );
   }
@@ -305,49 +458,22 @@ class _TextReaderCameraScreenState extends State<TextReaderCameraScreen>
       child: Text(
         _statusText,
         textAlign: TextAlign.center,
-        style: TextStyle(
-          color: theme.colorScheme.onPrimary,
-          fontSize: 14,
-          fontWeight: FontWeight.w600,
-        ),
+        style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w600),
       ),
     );
   }
 
-  Widget _buildCenteredMessage(
-    ThemeData theme, {
-    required String title,
-    required String message,
-    bool showLoader = false,
-  }) {
+  Widget _buildCenteredMessage(ThemeData theme, {required String title, required String message, bool showLoader = false}) {
     return Center(
       child: Padding(
         padding: const EdgeInsets.all(24),
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            if (showLoader) ...[
-              const CircularProgressIndicator(),
-              const SizedBox(height: 18),
-            ],
-            Text(
-              title,
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                color: theme.colorScheme.onSurface,
-                fontSize: 20,
-                fontWeight: FontWeight.w700,
-              ),
-            ),
+            if (showLoader) ...[const CircularProgressIndicator(), const SizedBox(height: 18)],
+            Text(title, style: TextStyle(color: theme.colorScheme.onSurface, fontSize: 20, fontWeight: FontWeight.w700)),
             const SizedBox(height: 10),
-            Text(
-              message,
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                color: theme.colorScheme.onSurface.withValues(alpha: 0.8),
-                height: 1.4,
-              ),
-            ),
+            Text(message, textAlign: TextAlign.center, style: TextStyle(color: theme.colorScheme.onSurface.withValues(alpha: 0.8), height: 1.4)),
           ],
         ),
       ),
@@ -356,23 +482,26 @@ class _TextReaderCameraScreenState extends State<TextReaderCameraScreen>
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-
     return Scaffold(
       backgroundColor: Colors.black,
       appBar: AppBar(
         backgroundColor: Colors.black,
         foregroundColor: Colors.white,
-        title: const Text('Text Reader Camera'),
+        title: Text(widget.liveMode ? 'Live Reading' : 'Text Reader Camera'),
         leading: IconButton(
           icon: const Icon(Icons.arrow_back_ios_new),
           onPressed: () {
-            _cancelCountdown();
+            _cancelTimers();
             Navigator.of(context).pop<String>(null);
           },
         ),
       ),
-      body: SafeArea(child: _buildBody(theme)),
+      body: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: _handleTapForGoBack,
+        child: SafeArea(child: _buildBody(Theme.of(context))),
+      ),
     );
   }
 }
+

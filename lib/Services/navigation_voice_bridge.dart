@@ -3,10 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 enum NavigationVoiceCommandType {
-  selectIndoor,
-  selectOutdoor,
-  startIndoorDetection,
-  startOutdoorDetection,
+  startDetection,
   stopDetection,
 }
 

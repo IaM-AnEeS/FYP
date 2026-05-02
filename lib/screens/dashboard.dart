@@ -141,9 +141,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
               // --- Top Action Card ---
               _buildOptionCard(
                 context,
-                icon: Icons.navigation_outlined,
-                title: "Navigate",
-                subtitle: "Realtime directions",
+                icon: Icons.center_focus_strong,
+                title: "Object Detection",
+                subtitle: "AI-powered guidance",
                 cardHeight: 165,
                 onTap: () {
                   Navigator.pushNamed(context, '/navigation');

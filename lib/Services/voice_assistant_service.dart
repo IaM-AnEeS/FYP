@@ -8,6 +8,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:speech_to_text/speech_to_text.dart' as stt;
 
 import '../models/detection.dart';
+import '../models/unified_detect_response.dart';
 import '../screens/navigation_screen.dart' as nav;
 import '../screens/text_reader.dart';
 import '../theme/color_scheme_manager.dart';
@@ -176,6 +177,11 @@ class VoiceAssistantService {
     0,
   );
   String _lastDetectionSignature = '';
+
+  // --- Live OCR State ---
+  DateTime _lastOcrSpeechAt = DateTime.fromMillisecondsSinceEpoch(0);
+  String _lastOcrText = '';
+  static const Duration _ocrSpeechCooldown = Duration(seconds: 3);
 
   double get pitch => _pitch;
   double get speechRate => _speechRate;
@@ -618,135 +624,81 @@ class VoiceAssistantService {
     }
   }
 
-  Future<void> announceDetections({
-    required String mode,
-    required List<Detection> detections,
+  Future<void> speakDetectionSentence(
+    String sentence, {
+    List<Detection> detections = const [],
+    int imageWidth = 1,
+    int imageHeight = 1,
   }) async {
-    if (!assistantEnabled.value || detections.isEmpty) return;
+    if (!assistantEnabled.value) return;
     if (_isCommandCapture || _isSpeaking) return;
 
     final now = DateTime.now();
+    // Global cooldown for any detection speech
     if (now.difference(_lastDetectionAnnouncementAt) <
-        const Duration(seconds: 4)) {
+        const Duration(seconds: 3)) {
       return;
     }
 
-    final summary = _buildDetectionSummary(mode, detections);
-    if (summary == null || summary.isEmpty) return;
+    String textToSpeak = sentence.trim();
 
-    final signature = '${mode.toLowerCase()}:${summary.toLowerCase()}';
-    final isDuplicate =
-        signature == _lastDetectionSignature &&
+    // If backend didn't provide a sentence but we have detections, build one.
+    if (textToSpeak.isEmpty && detections.isNotEmpty) {
+      final best = DistanceUtils.selectObjectForSpeech(
+        detections,
+        imageWidth,
+        imageHeight,
+      );
+      if (best != null) {
+        textToSpeak = DistanceUtils.buildSpeechText(best);
+      }
+    }
+
+    if (textToSpeak.isEmpty) return;
+
+    // Use DistanceUtils to generate a signature for meaningful change detection
+    final signature = detections.isNotEmpty
+        ? DistanceUtils.generateDetectionSignature(
+          detections,
+          imageWidth,
+          imageHeight,
+        )
+        : textToSpeak.toLowerCase();
+
+    final isDuplicate = signature == _lastDetectionSignature &&
         now.difference(_lastDetectionAnnouncementAt) <
-            const Duration(seconds: 12);
+            const Duration(seconds: 15);
 
     if (isDuplicate) return;
 
     _lastDetectionSignature = signature;
     _lastDetectionAnnouncementAt = now;
 
-    await speak(summary);
+    await speak(textToSpeak);
   }
 
-  String? _buildDetectionSummary(String mode, List<Detection> detections) {
-    final normalizedMode = mode.toLowerCase();
+  /// Specialized speech for live OCR mode in Text Reader.
+  /// Handles its own cooldown and duplicate suppression.
+  Future<void> speakLiveOcrText(String text) async {
+    if (!assistantEnabled.value || text.trim().isEmpty) return;
+    if (_isCommandCapture || _isSpeaking) return;
 
-    final sorted = List<Detection>.from(detections)
-      ..sort((a, b) => b.confidence.compareTo(a.confidence));
+    final now = DateTime.now();
+    final normalized = text.trim();
 
-    if (normalizedMode == 'outdoor') {
-      return _buildOutdoorDetectionSummary(sorted);
+    // Suppress if too soon or exact same text as last time
+    if (now.difference(_lastOcrSpeechAt) < _ocrSpeechCooldown) return;
+    if (normalized.toLowerCase() == _lastOcrText.toLowerCase() &&
+        now.difference(_lastOcrSpeechAt) < const Duration(seconds: 12)) {
+      return;
     }
 
-    final indoorPriority = <String>{
-      'plate',
-      'monitor',
-      'keyboard',
-      'chair',
-      'table',
-      'door',
-      'bottle',
-    };
+    _lastOcrText = normalized;
+    _lastOcrSpeechAt = now;
 
-    final prioritySet = indoorPriority;
-
-    final selected = <String>[];
-
-    for (final detection in sorted) {
-      final label = detection.label.trim().toLowerCase();
-      if (label.isEmpty) continue;
-      if (!prioritySet.contains(label)) continue;
-      if (selected.contains(label)) continue;
-      selected.add(label);
-      if (selected.length == 3) break;
-    }
-
-    if (selected.isEmpty) {
-      for (final detection in sorted) {
-        final label = detection.label.trim().toLowerCase();
-        if (label.isEmpty || selected.contains(label)) continue;
-        selected.add(label);
-        if (selected.length == 2) break;
-      }
-    }
-
-    if (selected.isEmpty) return null;
-
-    if (selected.length == 1) {
-      return '${selected.first} detected';
-    }
-
-    if (selected.length == 2) {
-      return '${selected[0]} and ${selected[1]} detected';
-    }
-
-    return '${selected[0]}, ${selected[1]} and ${selected[2]} detected';
+    await speak(normalized, resumeWakeListening: false);
   }
 
-  String? _buildOutdoorDetectionSummary(List<Detection> detections) {
-    if (detections.isEmpty) return null;
-
-    final outdoorPriority = <String>{
-      'person',
-      'boy',
-      'girl',
-      'car',
-      'traffic light',
-      'bus',
-      'bicycle',
-      'motorcycle',
-      'truck',
-    };
-
-    Detection? selected;
-
-    for (final detection in detections) {
-      final label = detection.label.trim().toLowerCase();
-      if (label.isEmpty) continue;
-
-      final hasDistance =
-          DistanceUtils.buildDisplayDistanceLabel(detection) != null;
-      if (hasDistance && outdoorPriority.contains(label)) {
-        selected = detection;
-        break;
-      }
-    }
-
-    selected ??= detections.firstWhere(
-      (d) => DistanceUtils.buildDisplayDistanceLabel(d) != null,
-      orElse: () => detections.first,
-    );
-
-    final spokenLabel = selected.label.trim().toLowerCase();
-    if (spokenLabel.isEmpty) return null;
-
-    final distanceText = DistanceUtils.buildDisplayDistanceLabel(selected);
-    if (distanceText == null) {
-      return '$spokenLabel detected';
-    }
-
-    return '$spokenLabel, $distanceText';
-  }
 
   bool _canListen() {
     return Platform.isAndroid &&
@@ -977,26 +929,9 @@ class VoiceAssistantService {
         }
         _openTextReader(autoOpenCamera: intent.preferCamera);
         break;
-      case VoiceActionType.openNavigation:
-        await speak('Opening navigation.', resumeWakeListening: false);
-        _openOrFocusNavigation(
-          initialMode: 'Indoor',
-          autoStartDetection: false,
-        );
-        break;
-      case VoiceActionType.openIndoorNavigation:
-        await speak('Opening indoor navigation.', resumeWakeListening: false);
-        _openOrFocusNavigation(
-          initialMode: 'Indoor',
-          autoStartDetection: false,
-        );
-        break;
-      case VoiceActionType.openOutdoorNavigation:
-        await speak('Opening outdoor navigation.', resumeWakeListening: false);
-        _openOrFocusNavigation(
-          initialMode: 'Outdoor',
-          autoStartDetection: false,
-        );
+      case VoiceActionType.openObjectDetection:
+        await speak('Opening object detection.', resumeWakeListening: false);
+        _openOrFocusObjectDetection(autoStart: false);
         break;
       case VoiceActionType.setThemeLight:
         await ThemeManager.setThemeMode(ThemeMode.light);
@@ -1038,13 +973,9 @@ class VoiceAssistantService {
         await ColorSchemeManager.setPrimaryColor(const Color(0xFF2E8B57));
         await speak('Changed to sea green color.', resumeWakeListening: false);
         break;
-      case VoiceActionType.startIndoorDetection:
-        await speak('Starting indoor detection.', resumeWakeListening: false);
-        _startDetectionFromVoice(isIndoor: true);
-        break;
-      case VoiceActionType.startOutdoorDetection:
-        await speak('Starting outdoor detection.', resumeWakeListening: false);
-        _startDetectionFromVoice(isIndoor: false);
+      case VoiceActionType.startObjectDetection:
+        await speak('Starting object detection.', resumeWakeListening: false);
+        _openOrFocusObjectDetection(autoStart: true);
         break;
       case VoiceActionType.stopDetection:
         await _stopDetectionFromVoice();
@@ -1102,56 +1033,31 @@ class VoiceAssistantService {
     await _exitCommandModeToWake();
   }
 
-  void _openNavigation({
-    required String initialMode,
+  void _openObjectDetection({
     required bool autoStartDetection,
   }) {
     navigatorKey.currentState?.push(
       MaterialPageRoute<void>(
         builder: (_) => nav.NavigationScreen(
-          initialMode: initialMode,
           autoStartDetection: autoStartDetection,
         ),
       ),
     );
   }
 
-  void _openOrFocusNavigation({
-    required String initialMode,
-    required bool autoStartDetection,
+  void _openOrFocusObjectDetection({
+    required bool autoStart,
   }) {
     final bridge = NavigationVoiceBridge.instance;
 
-    final bool targetIndoor = initialMode.toLowerCase() != 'outdoor';
-    final NavigationVoiceCommandType selectCommand = targetIndoor
-        ? NavigationVoiceCommandType.selectIndoor
-        : NavigationVoiceCommandType.selectOutdoor;
-    final NavigationVoiceCommandType startCommand = targetIndoor
-        ? NavigationVoiceCommandType.startIndoorDetection
-        : NavigationVoiceCommandType.startOutdoorDetection;
-
     if (bridge.navigationVisible.value) {
-      debugPrint(
-        '[VoiceAssistant] Navigation already visible. Selecting $initialMode mode.',
-      );
-      bridge.send(selectCommand);
-
-      if (autoStartDetection) {
-        debugPrint(
-          '[VoiceAssistant] Sending start detection command for $initialMode.',
-        );
-        bridge.send(startCommand);
+      if (autoStart) {
+        bridge.send(NavigationVoiceCommandType.startDetection);
       }
       return;
     }
 
-    debugPrint(
-      '[VoiceAssistant] Opening navigation screen. mode=$initialMode autoStart=$autoStartDetection',
-    );
-    _openNavigation(
-      initialMode: initialMode,
-      autoStartDetection: autoStartDetection,
-    );
+    _openObjectDetection(autoStartDetection: autoStart);
   }
 
   void _openTextReader({required bool autoOpenCamera}) {
@@ -1162,12 +1068,6 @@ class VoiceAssistantService {
     );
   }
 
-  void _startDetectionFromVoice({required bool isIndoor}) {
-    _openOrFocusNavigation(
-      initialMode: isIndoor ? 'Indoor' : 'Outdoor',
-      autoStartDetection: true,
-    );
-  }
 
   Future<void> _stopDetectionFromVoice() async {
     final bridge = NavigationVoiceBridge.instance;

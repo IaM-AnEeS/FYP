@@ -12,8 +12,10 @@ import 'text_reader_camera_screen.dart';
 
 enum _TextReaderVoiceCommandType {
   openCamera,
+  startLiveReading,
   readRecognizedText,
   goHome,
+  goBack,
   unknown,
 }
 
@@ -81,6 +83,20 @@ class _TextReaderScreenState extends State<TextReaderScreen> {
     'go home',
     'home screen',
     'open home',
+  ];
+
+  static const List<String> _liveReadingCommandPhrases = <String>[
+    'start live reading',
+    'live reading',
+    'start reading text',
+    'read text live',
+  ];
+
+  static const List<String> _goBackCommandPhrases = <String>[
+    'go back',
+    'back',
+    'return',
+    'close',
   ];
 
   @override
@@ -404,9 +420,21 @@ class _TextReaderScreenState extends State<TextReaderScreen> {
       }
     }
 
+    for (final String phrase in _liveReadingCommandPhrases) {
+      if (normalized.contains(phrase)) {
+        return _TextReaderVoiceCommandType.startLiveReading;
+      }
+    }
+
     for (final String phrase in _goHomeCommandPhrases) {
       if (normalized.contains(phrase)) {
         return _TextReaderVoiceCommandType.goHome;
+      }
+    }
+
+    for (final String phrase in _goBackCommandPhrases) {
+      if (normalized.contains(phrase)) {
+        return _TextReaderVoiceCommandType.goBack;
       }
     }
 
@@ -418,11 +446,17 @@ class _TextReaderScreenState extends State<TextReaderScreen> {
       case _TextReaderVoiceCommandType.openCamera:
         await _handleLocalCameraCommand();
         return;
+      case _TextReaderVoiceCommandType.startLiveReading:
+        await _handleLiveReadingCommand();
+        return;
       case _TextReaderVoiceCommandType.readRecognizedText:
         await _handleReadRecognizedTextCommand();
         return;
       case _TextReaderVoiceCommandType.goHome:
         await _handleGoHomeCommand();
+        return;
+      case _TextReaderVoiceCommandType.goBack:
+        await _handleGoBackCommand();
         return;
       case _TextReaderVoiceCommandType.unknown:
         return;
@@ -490,6 +524,46 @@ class _TextReaderScreenState extends State<TextReaderScreen> {
 
     if (!mounted) return;
     Navigator.of(context).pushNamedAndRemoveUntil('/dashboard', (_) => false);
+  }
+
+  Future<void> _handleGoBackCommand() async {
+    await _finishLocalCommandListening(
+      noCommandHeard: false,
+      customStatus: 'Going back...',
+    );
+
+    await _voiceAssistant.speak(
+      'Going back.',
+      resumeWakeListening: false,
+      forceWhenDisabled: true,
+    );
+
+    if (!mounted) return;
+    Navigator.of(context).pop();
+  }
+
+  Future<void> _handleLiveReadingCommand() async {
+    await _finishLocalCommandListening(
+      noCommandHeard: false,
+      customStatus: 'Starting live reading...',
+    );
+
+    await _voiceAssistant.speak(
+      'Starting live reading mode.',
+      resumeWakeListening: false,
+      forceWhenDisabled: true,
+    );
+
+    if (!mounted) return;
+    
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        settings: const RouteSettings(name: '/text-reader-live'),
+        builder: (_) => const TextReaderCameraScreen(
+          liveMode: true,
+        ),
+      ),
+    );
   }
 
   Future<void> _finishLocalCommandListening({

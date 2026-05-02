@@ -1,4 +1,4 @@
-﻿import 'dart:async';
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:camera/camera.dart';
@@ -11,21 +11,12 @@ import '../Services/detection_service.dart';
 import '../Services/frame_log_service.dart';
 import '../Services/navigation_voice_bridge.dart';
 import '../Services/voice_assistant_service.dart';
-import '../models/detection.dart';
-import '../painters/detection_painter.dart';
-import '../utils/distance_utils.dart';
-
-const bool kShowNavigationDebugPanel = true;
-
-enum NavigationMode { indoor, outdoor }
 
 class NavigationScreen extends StatefulWidget {
-  final String initialMode;
   final bool autoStartDetection;
 
   const NavigationScreen({
     super.key,
-    this.initialMode = 'Indoor',
     this.autoStartDetection = false,
   });
 
@@ -42,10 +33,7 @@ class _NavigationScreenState extends State<NavigationScreen>
 
   StreamSubscription<NavigationVoiceCommand>? _voiceCommandSub;
 
-  late NavigationMode _selectedMode;
-  NavigationMode? _activeMode;
   int _captureSession = 0;
-
   CameraController? _cameraController;
   Timer? _captureTimer;
 
@@ -55,20 +43,14 @@ class _NavigationScreenState extends State<NavigationScreen>
   bool _isPermissionDenied = false;
   bool _isDisposing = false;
 
-  List<Detection> _detections = [];
-  int _imageWidth = 1;
-  int _imageHeight = 1;
-
-  String _statusText = 'Select a mode and tap to start detection';
+  String _statusText = 'Tap to start object detection';
+  String _latestSentence = '';
   double _lastInferenceMs = 0;
-  int _detectionCount = 0;
 
   DateTime? _sessionStartedAt;
-  String? _sessionMode;
   int _sessionFramesProcessed = 0;
   int _sessionSuccessfulFrames = 0;
   int _sessionFailedFrames = 0;
-  int _sessionDetectionsTotal = 0;
   double _sessionInferenceTotalMs = 0;
   int _sessionInferenceSamples = 0;
 
@@ -103,39 +85,11 @@ class _NavigationScreenState extends State<NavigationScreen>
     });
   }
 
-  String _modeTitle(NavigationMode mode) {
-    return mode == NavigationMode.indoor ? 'Indoor' : 'Outdoor';
-  }
-
-  DetectionBackendMode _backendModeFor(NavigationMode mode) {
-    return mode == NavigationMode.indoor
-        ? DetectionBackendMode.indoor
-        : DetectionBackendMode.outdoor;
-  }
-
-  String _idleStatusFor(NavigationMode mode) {
-    return '${_modeTitle(mode)} mode ready. Tap to Start.';
-  }
-
-  String _permissionTextFor(NavigationMode mode) {
-    return 'Camera permission is required for ${_modeTitle(mode).toLowerCase()} detection.';
-  }
-
-  String _noDetectionsStatusFor(NavigationMode mode) {
-    return mode == NavigationMode.indoor
-        ? 'No indoor objects detected'
-        : 'No outdoor objects detected';
-  }
-
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _selectedMode = widget.initialMode.toLowerCase() == 'outdoor'
-        ? NavigationMode.outdoor
-        : NavigationMode.indoor;
-    _statusText = _idleStatusFor(_selectedMode);
-
+    
     _voiceBridge.setNavigationVisible(true);
     _voiceBridge.setDetectionRunning(false);
     _voiceCommandSub = _voiceBridge.commands.listen((command) {
@@ -145,7 +99,7 @@ class _NavigationScreenState extends State<NavigationScreen>
     if (widget.autoStartDetection) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
-        unawaited(_startDetectionForSelectedMode());
+        unawaited(_startDetection());
       });
     }
   }
@@ -167,19 +121,8 @@ class _NavigationScreenState extends State<NavigationScreen>
     debugPrint('[NavigationVoice] Received command: ${command.type.name}');
 
     switch (command.type) {
-      case NavigationVoiceCommandType.selectIndoor:
-        _onModeSelected(NavigationMode.indoor);
-        break;
-      case NavigationVoiceCommandType.selectOutdoor:
-        _onModeSelected(NavigationMode.outdoor);
-        break;
-      case NavigationVoiceCommandType.startIndoorDetection:
-        _onModeSelected(NavigationMode.indoor);
-        await _startDetectionForSelectedMode();
-        break;
-      case NavigationVoiceCommandType.startOutdoorDetection:
-        _onModeSelected(NavigationMode.outdoor);
-        await _startDetectionForSelectedMode();
+      case NavigationVoiceCommandType.startDetection:
+        await _startDetection();
         break;
       case NavigationVoiceCommandType.stopDetection:
         if (_isDetectionRunning) {
@@ -202,79 +145,53 @@ class _NavigationScreenState extends State<NavigationScreen>
     }
   }
 
-  void _onModeSelected(NavigationMode mode) {
-    if (_selectedMode == mode) return;
-
-    if (_isDetectionRunning) {
-      _stopDetection(
-        statusText: 'Detection stopped. Tap to Start to run again.',
-      );
-    }
-
-    setState(() {
-      _selectedMode = mode;
-      _isPermissionDenied = false;
-      _statusText = _idleStatusFor(mode);
-    });
-  }
-
   Future<void> _onBottomButtonPressed() async {
     if (_isDetectionRunning) {
       _stopDetection(statusText: 'Detection stopped.');
       return;
     }
 
-    await _startDetectionForSelectedMode();
+    await _startDetection();
   }
 
-  Future<void> _startDetectionForSelectedMode() async {
+  Future<void> _startDetection() async {
     if (_isDisposing) return;
 
     if (_isDetectionRunning) {
       debugPrint(
         '[NavigationVoice] Ignored start request because detection is already running.',
       );
-
-      if (mounted) {
-        setState(() {
-          _statusText =
-              'Detection already running in ${_modeTitle(_activeMode ?? _selectedMode)} mode.';
-        });
-      }
       return;
     }
 
-    final NavigationMode modeToStart = _selectedMode;
     final int session = ++_captureSession;
     _frameLogService.resetSession();
     _resetAnalyticsSession();
     _sessionStartedAt = DateTime.now();
-    _sessionMode = modeToStart == NavigationMode.indoor ? 'indoor' : 'outdoor';
 
     debugPrint(
-      '[NavigationVoice] Starting detection for ${_modeTitle(modeToStart)} mode. session=$session',
+      '[NavigationVoice] Starting unified object detection. session=$session',
     );
 
     setState(() {
-      _activeMode = modeToStart;
       _isPermissionDenied = false;
-      _statusText = 'Initialising camera for ${_modeTitle(modeToStart)}...';
+      _statusText = 'Initialising camera...';
+      _latestSentence = '';
     });
 
-    await _initCamera(modeToStart, session);
+    await _initCamera(session);
   }
 
-  Future<void> _initCamera(NavigationMode modeToStart, int session) async {
+  Future<void> _initCamera(int session) async {
     if (_isDisposing) return;
 
     final status = await Permission.camera.request();
-    if (!_isSessionValid(session) || _activeMode != modeToStart) return;
+    if (!_isSessionValid(session)) return;
 
     if (!status.isGranted) {
       if (mounted) {
         setState(() {
           _isPermissionDenied = true;
-          _activeMode = null;
           _isDetectionRunning = false;
           _isCameraReady = false;
           _statusText = 'Camera permission denied';
@@ -290,7 +207,6 @@ class _NavigationScreenState extends State<NavigationScreen>
     } catch (e) {
       if (mounted) {
         setState(() {
-          _activeMode = null;
           _statusText = 'Camera error: $e';
         });
         _voiceBridge.setDetectionRunning(false);
@@ -298,12 +214,11 @@ class _NavigationScreenState extends State<NavigationScreen>
       return;
     }
 
-    if (!_isSessionValid(session) || _activeMode != modeToStart) return;
+    if (!_isSessionValid(session)) return;
 
     if (cameras.isEmpty) {
       if (mounted) {
         setState(() {
-          _activeMode = null;
           _statusText = 'No cameras found on this device';
         });
         _voiceBridge.setDetectionRunning(false);
@@ -333,7 +248,6 @@ class _NavigationScreenState extends State<NavigationScreen>
       }
       if (mounted) {
         setState(() {
-          _activeMode = null;
           _statusText = 'Camera init error: $e';
         });
         _voiceBridge.setDetectionRunning(false);
@@ -341,9 +255,7 @@ class _NavigationScreenState extends State<NavigationScreen>
       return;
     }
 
-    if (!mounted ||
-        !_isSessionValid(session, controller: controller) ||
-        _activeMode != modeToStart) {
+    if (!mounted || !_isSessionValid(session, controller: controller)) {
       _stopDetection(setIdleMessage: false);
       return;
     }
@@ -351,8 +263,7 @@ class _NavigationScreenState extends State<NavigationScreen>
     setState(() {
       _isCameraReady = true;
       _isDetectionRunning = true;
-      _statusText =
-          'Connecting to ${_modeTitle(modeToStart).toLowerCase()} server...';
+      _statusText = 'Connecting to server...';
     });
     _voiceBridge.setDetectionRunning(true);
 
@@ -383,15 +294,12 @@ class _NavigationScreenState extends State<NavigationScreen>
     void applyState() {
       _isCameraReady = false;
       _isDetectionRunning = false;
-      _activeMode = null;
-      _detections = [];
-      _detectionCount = 0;
       _lastInferenceMs = 0;
 
       if (statusText != null) {
         _statusText = statusText;
       } else if (setIdleMessage) {
-        _statusText = _idleStatusFor(_selectedMode);
+        _statusText = 'Tap to start object detection';
       }
     }
 
@@ -410,11 +318,7 @@ class _NavigationScreenState extends State<NavigationScreen>
   Future<void> _captureAndDetect(int session) async {
     if (!_isSessionValid(session)) return;
 
-    final NavigationMode? activeMode = _activeMode;
-    if (_isRequestInFlight ||
-        !_isDetectionRunning ||
-        activeMode == null ||
-        _isDisposing) {
+    if (_isRequestInFlight || !_isDetectionRunning || _isDisposing) {
       return;
     }
 
@@ -449,13 +353,9 @@ class _NavigationScreenState extends State<NavigationScreen>
 
       if (!_isSessionValid(session, controller: controller) || !mounted) return;
 
-      final PredictResult result = activeMode == NavigationMode.indoor
-          ? await DetectionService.predictIndoor(jpegToSend)
-          : await DetectionService.predictOutdoor(jpegToSend);
+      final result = await DetectionService.detectUnified(jpegToSend);
 
-      if (!mounted ||
-          !_isSessionValid(session, controller: controller) ||
-          _activeMode != activeMode) {
+      if (!mounted || !_isSessionValid(session, controller: controller)) {
         return;
       }
 
@@ -469,54 +369,21 @@ class _NavigationScreenState extends State<NavigationScreen>
         final resp = result.response!;
         _sessionFramesProcessed += 1;
         _sessionSuccessfulFrames += 1;
-        _sessionInferenceTotalMs += resp.inferenceMs;
-        _sessionInferenceSamples += 1;
-
-        if (resp.detections.isEmpty) {
-          setState(() {
-            _detections = [];
-            _detectionCount = 0;
-            _lastInferenceMs = resp.inferenceMs;
-            _statusText = _noDetectionsStatusFor(activeMode);
-          });
-        } else {
-          _sessionDetectionsTotal += resp.detections.length;
-
-          final modeText = activeMode == NavigationMode.indoor
-              ? 'indoor'
-              : 'outdoor';
-          final backendUrl = DetectionService.baseUrlForMode(
-            _backendModeFor(activeMode),
-          );
-
-          unawaited(
-            VoiceAssistantService.instance.announceDetections(
-              mode: modeText,
-              detections: resp.detections,
-            ),
-          );
-
-          unawaited(
-            _frameLogService.logFrame(
-              mode: modeText,
-              backendUrl: backendUrl,
-              detections: resp.detections,
-              imageWidth: resp.imageWidth,
-              imageHeight: resp.imageHeight,
-              inferenceMs: resp.inferenceMs,
-            ),
-          );
-
-          setState(() {
-            _detections = resp.detections;
-            _imageWidth = resp.imageWidth;
-            _imageHeight = resp.imageHeight;
-            _detectionCount = resp.detections.length;
-            _lastInferenceMs = resp.inferenceMs;
-            _statusText =
-                '${resp.detections.length} object(s) · ${resp.inferenceMs.toStringAsFixed(0)} ms';
-          });
+        if (resp.inferenceMs != null) {
+          _sessionInferenceTotalMs += resp.inferenceMs!;
+          _sessionInferenceSamples += 1;
         }
+
+        setState(() {
+          _latestSentence = resp.sentence;
+          _lastInferenceMs = resp.inferenceMs ?? 0;
+          _statusText = 'Object detection active';
+        });
+
+        // Speak the sentence via TTS
+        unawaited(
+          VoiceAssistantService.instance.speakDetectionSentence(resp.sentence),
+        );
       }
     } catch (e) {
       _sessionFramesProcessed += 1;
@@ -534,8 +401,7 @@ class _NavigationScreenState extends State<NavigationScreen>
 
   void _finalizeAnalyticsSession() {
     final startedAt = _sessionStartedAt;
-    final mode = _sessionMode;
-    if (startedAt == null || mode == null) {
+    if (startedAt == null) {
       _resetAnalyticsSession();
       return;
     }
@@ -548,19 +414,18 @@ class _NavigationScreenState extends State<NavigationScreen>
     final framesProcessed = _sessionFramesProcessed;
     final successfulFrames = _sessionSuccessfulFrames;
     final failedFrames = _sessionFailedFrames;
-    final detectionsCount = _sessionDetectionsTotal;
 
     _resetAnalyticsSession();
 
     unawaited(
       _analyticsService.recordDetectionSession(
-        mode: mode,
+        mode: 'unified',
         startedAt: startedAt,
         endedAt: endedAt,
         framesProcessed: framesProcessed,
         successfulFrames: successfulFrames,
         failedFrames: failedFrames,
-        detectionsCount: detectionsCount,
+        detectionsCount: 0, // Not applicable for sentence-based
         averageInferenceMs: averageInferenceMs,
       ),
     );
@@ -568,310 +433,26 @@ class _NavigationScreenState extends State<NavigationScreen>
 
   void _resetAnalyticsSession() {
     _sessionStartedAt = null;
-    _sessionMode = null;
     _sessionFramesProcessed = 0;
     _sessionSuccessfulFrames = 0;
     _sessionFailedFrames = 0;
-    _sessionDetectionsTotal = 0;
     _sessionInferenceTotalMs = 0;
     _sessionInferenceSamples = 0;
-  }
-
-  Widget _modeButton(NavigationMode mode) {
-    final bool selected = _selectedMode == mode;
-    final theme = Theme.of(context);
-    return Expanded(
-      child: ElevatedButton(
-        onPressed: () => _onModeSelected(mode),
-        style: ElevatedButton.styleFrom(
-          backgroundColor: selected
-              ? theme.colorScheme.primary
-              : theme.colorScheme.surface.withAlpha((0.9 * 0xFF).round()),
-          foregroundColor: selected
-              ? theme.colorScheme.onPrimary
-              : theme.colorScheme.onSurface,
-        ),
-        child: Text(_modeTitle(mode)),
-      ),
-    );
-  }
-
-  Widget _buildModeButtons() {
-    return Row(
-      children: [
-        _modeButton(NavigationMode.indoor),
-        const SizedBox(width: 8),
-        _modeButton(NavigationMode.outdoor),
-      ],
-    );
-  }
-
-  Widget _buildIdlePanel(ThemeData theme, NavigationMode mode) {
-    return Container(
-      width: double.infinity,
-      margin: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: theme.colorScheme.surface,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(
-          color: theme.colorScheme.outline.withAlpha((0.2 * 0xFF).round()),
-        ),
-      ),
-      child: Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(
-              mode == NavigationMode.indoor
-                  ? Icons.home_work_outlined
-                  : Icons.navigation,
-              size: 60,
-              color: theme.colorScheme.onSurface.withAlpha(
-                (0.7 * 0xFF).round(),
-              ),
-            ),
-            const SizedBox(height: 12),
-            Text(
-              '${_modeTitle(mode)} mode selected',
-              style: TextStyle(
-                color: theme.colorScheme.onSurface,
-                fontSize: 18,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              _idleStatusFor(mode),
-              style: TextStyle(
-                color: theme.colorScheme.onSurface.withAlpha(
-                  (0.7 * 0xFF).round(),
-                ),
-                fontSize: 14,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildLiveDetectionPanel(ThemeData theme, NavigationMode mode) {
-    if (_isPermissionDenied) {
-      return Center(
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(
-                Icons.no_photography,
-                size: 64,
-                color: theme.colorScheme.error,
-              ),
-              const SizedBox(height: 16),
-              Text(
-                _permissionTextFor(mode),
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  color: theme.colorScheme.onSurface,
-                  fontSize: 15,
-                ),
-              ),
-              const SizedBox(height: 16),
-              ElevatedButton.icon(
-                onPressed: openAppSettings,
-                icon: const Icon(Icons.settings),
-                label: const Text('Open Settings'),
-              ),
-            ],
-          ),
-        ),
-      );
-    }
-
-    if (!_isDetectionRunning || !_isCameraReady || _cameraController == null) {
-      return _buildIdlePanel(theme, mode);
-    }
-
-    return Container(
-      margin: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: Colors.black,
-        borderRadius: BorderRadius.circular(16),
-      ),
-      clipBehavior: Clip.hardEdge,
-      child: Stack(
-        fit: StackFit.expand,
-        children: [
-          CameraPreview(_cameraController!),
-          LayoutBuilder(
-            builder: (context, constraints) {
-              return CustomPaint(
-                size: Size(constraints.maxWidth, constraints.maxHeight),
-                painter: DetectionPainter(
-                  detections: _detections,
-                  imageWidth: _imageWidth,
-                  imageHeight: _imageHeight,
-                  showDistance: mode == NavigationMode.outdoor,
-                  showConfidence: mode == NavigationMode.indoor,
-                ),
-              );
-            },
-          ),
-          if (kShowNavigationDebugPanel)
-            Positioned(
-              top: 8,
-              left: 8,
-              child: Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: Colors.black.withAlpha((0.6 * 0xFF).round()),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Mode: ${_modeTitle(mode)}',
-                      style: const TextStyle(
-                        color: Colors.greenAccent,
-                        fontSize: 11,
-                      ),
-                    ),
-                    Text(
-                      'URL: ${DetectionService.baseUrlForMode(_backendModeFor(mode))}',
-                      style: const TextStyle(
-                        color: Colors.greenAccent,
-                        fontSize: 11,
-                      ),
-                    ),
-                    Text(
-                      'Inference: ${_lastInferenceMs.toStringAsFixed(0)} ms',
-                      style: const TextStyle(
-                        color: Colors.greenAccent,
-                        fontSize: 11,
-                      ),
-                    ),
-                    Text(
-                      'Detections: $_detectionCount',
-                      style: const TextStyle(
-                        color: Colors.greenAccent,
-                        fontSize: 11,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          if (mode == NavigationMode.outdoor && _detections.isNotEmpty)
-            Positioned(
-              left: 8,
-              right: 8,
-              bottom: 48,
-              child: _buildOutdoorDistanceChips(theme),
-            ),
-          Positioned(
-            bottom: 0,
-            left: 0,
-            right: 0,
-            child: Container(
-              color: Colors.black54,
-              padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 16),
-              child: Text(
-                _statusText,
-                textAlign: TextAlign.center,
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 14,
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildOutdoorDistanceChips(ThemeData theme) {
-    final seen = <String>{};
-    final chipTexts = <String>[];
-
-    for (final detection in _detections) {
-      final label = detection.label.trim();
-      if (label.isEmpty) continue;
-
-      final distance = DistanceUtils.buildDisplayDistanceLabel(detection);
-      if (distance == null) continue;
-
-      final key = '${label.toLowerCase()}|${distance.toLowerCase()}';
-      if (!seen.add(key)) continue;
-
-      chipTexts.add('$label - $distance');
-    }
-
-    if (chipTexts.isEmpty) {
-      return const SizedBox.shrink();
-    }
-
-    const maxVisible = 3;
-    final visible = chipTexts.take(maxVisible).toList();
-    final hidden = chipTexts.length - visible.length;
-
-    return SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
-      child: Row(
-        children: [
-          for (final text in visible)
-            Padding(
-              padding: const EdgeInsets.only(right: 8),
-              child: _distanceChip(theme, text),
-            ),
-          if (hidden > 0) _distanceChip(theme, '+$hidden more'),
-        ],
-      ),
-    );
-  }
-
-  Widget _distanceChip(ThemeData theme, String text) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-      decoration: BoxDecoration(
-        color: Colors.black.withAlpha((0.62 * 0xFF).round()),
-        borderRadius: BorderRadius.circular(999),
-        border: Border.all(
-          color: theme.colorScheme.primary.withAlpha((0.55 * 0xFF).round()),
-        ),
-      ),
-      child: Text(
-        text,
-        style: const TextStyle(
-          color: Colors.white,
-          fontSize: 12,
-          fontWeight: FontWeight.w500,
-        ),
-      ),
-    );
   }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final bool running = _isDetectionRunning;
-    final NavigationMode panelMode = _activeMode ?? _selectedMode;
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Navigation'),
+        title: const Text('Object Detection'),
         backgroundColor: theme.colorScheme.primary,
       ),
       body: Column(
         children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
-            child: _buildModeButtons(),
-          ),
-          Expanded(child: _buildLiveDetectionPanel(theme, panelMode)),
+          Expanded(child: _buildLiveDetectionPanel(theme)),
           Padding(
             padding: const EdgeInsets.all(12),
             child: SizedBox(
@@ -895,6 +476,159 @@ class _NavigationScreenState extends State<NavigationScreen>
               ),
             ),
           ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildLiveDetectionPanel(ThemeData theme) {
+    if (_isPermissionDenied) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                Icons.no_photography,
+                size: 64,
+                color: theme.colorScheme.error,
+              ),
+              const SizedBox(height: 16),
+              const Text(
+                'Camera permission is required for object detection.',
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 15),
+              ),
+              const SizedBox(height: 16),
+              ElevatedButton.icon(
+                onPressed: openAppSettings,
+                icon: const Icon(Icons.settings),
+                label: const Text('Open Settings'),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    if (!_isDetectionRunning || !_isCameraReady || _cameraController == null) {
+      return Container(
+        width: double.infinity,
+        margin: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: theme.colorScheme.surface,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+            color: theme.colorScheme.outline.withAlpha((0.2 * 0xFF).round()),
+          ),
+        ),
+        child: Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                Icons.center_focus_strong,
+                size: 60,
+                color: theme.colorScheme.onSurface.withAlpha((0.7 * 0xFF).round()),
+              ),
+              const SizedBox(height: 12),
+              const Text(
+                'Object Detection',
+                style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                _statusText,
+                style: TextStyle(
+                  color: theme.colorScheme.onSurface.withAlpha((0.7 * 0xFF).round()),
+                  fontSize: 14,
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    return Container(
+      margin: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.black,
+        borderRadius: BorderRadius.circular(16),
+      ),
+      clipBehavior: Clip.hardEdge,
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          CameraPreview(_cameraController!),
+          
+          // Sentence Overlay
+          Positioned(
+            left: 16,
+            right: 16,
+            top: 20,
+            child: AnimatedOpacity(
+              duration: const Duration(milliseconds: 300),
+              opacity: _latestSentence.isNotEmpty ? 1.0 : 0.0,
+              child: Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: Colors.black.withAlpha((0.7 * 0xFF).round()),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(
+                    color: theme.colorScheme.primary.withAlpha((0.4 * 0xFF).round()),
+                  ),
+                ),
+                child: Text(
+                  _latestSentence,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 18,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ),
+            ),
+          ),
+
+          // Status bar at bottom
+          Positioned(
+            bottom: 0,
+            left: 0,
+            right: 0,
+            child: Container(
+              color: Colors.black54,
+              padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 16),
+              child: Text(
+                _statusText,
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 13,
+                ),
+              ),
+            ),
+          ),
+
+          // Loading indicator
+          if (_isRequestInFlight)
+            const Positioned(
+              top: 10,
+              right: 10,
+              child: SizedBox(
+                width: 20,
+                height: 20,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: Colors.white70,
+                ),
+              ),
+            ),
         ],
       ),
     );

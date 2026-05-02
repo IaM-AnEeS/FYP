@@ -154,9 +154,7 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
                   '/signup': (context) => const SignUpScreen(),
                   '/dashboard': (context) => DashboardScreen(),
                   '/navigation': (context) => const nav.NavigationScreen(),
-                  // Legacy route kept as safe redirect to new Outdoor flow.
-                  '/detection': (context) =>
-                      const nav.NavigationScreen(initialMode: 'Outdoor'),
+                  '/detection': (context) => const nav.NavigationScreen(),
                   '/profile': (context) => const ProfileScreen(),
                   '/settings': (context) => const SettingsScreen(),
                   '/chat': (context) => const AIAssistantScreen(),
